@@ -21,9 +21,14 @@ For each column, we estimate cardinality using exactly one sampled row group.
 
 - Read `statistics.distinct_count` from the sampled row group column.
 - If present, treat as sampled-row-group NDV.
+- Exclude nulls from denominator:
+  - sampled denominator = `sample_non_null_values`
+  - file denominator = `total_non_null_values`
+- `non_null_values` is computed as `num_values - null_count` when `null_count` stats are present.
+- If `null_count` is missing, we conservatively treat all values as non-null for that chunk.
 - Scale to file-level NDV using ratio:
-  - `sample_distinct / sample_total_values`
-  - multiplied by file-level `total_values` for the column.
+  - `sample_distinct / sample_non_null_values`
+  - multiplied by file-level `total_non_null_values` for the column.
 
 This is the cheapest path and preferred when available.
 
@@ -32,7 +37,7 @@ This is the cheapest path and preferred when available.
 - If Tier 1 is missing, inspect the sampled row group column pages.
 - If a dictionary page is found, use dictionary entry count as sampled NDV.
 - Stop once data pages are reached.
-- Scale the sampled NDV to file level (same ratio scaling as Tier 1).
+- Scale the sampled NDV to file level (same non-null ratio scaling as Tier 1).
 
 This is still lightweight and avoids materializing values.
 
@@ -41,15 +46,15 @@ This is still lightweight and avoids materializing values.
 - Used only for unresolved columns.
 - Only for flat schemas (same existing constraint as before).
 - Read up to `SAMPLE_ROWS` (currently `16_384`) from the sampled row group.
-- Hash sampled values and count unique hashes.
-- Scale sampled distinct ratio to file-level total values.
+- Hash sampled non-null values only and count unique hashes.
+- Scale sampled distinct ratio to file-level non-null values.
 
 This is the most expensive tier, so it is intentionally late and narrow.
 
 ## Conservatism / Final Fallback
 
 - If a column still cannot be estimated, assume all values are distinct:
-  - `distinct_count = total_count`.
+  - `distinct_count = non_null_count`.
 
 This avoids false low-cardinality recommendations.
 

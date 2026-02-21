@@ -7,25 +7,28 @@ use std::process;
 use parquet_linter::diagnostic::Severity;
 
 #[derive(Parser)]
-#[command(name = "parquet-lint", about = "Lint and fix parquet files")]
+#[command(
+    name = "parquet-linter",
+    about = "Lint and fix parquet files",
+    args_conflicts_with_subcommands = true,
+    arg_required_else_help = true
+)]
 struct Cli {
+    /// File path or URL (local, s3://, https://)
+    #[arg(value_name = "FILE")]
+    file: Option<String>,
+    /// Only run specific rules (comma-separated)
+    #[arg(long, value_delimiter = ',')]
+    rules: Option<Vec<String>>,
+    /// Minimum severity to display
+    #[arg(long)]
+    severity: Option<Severity>,
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
 enum Command {
-    /// Check a parquet file for issues
-    Check {
-        /// File path or URL (local, s3://, https://)
-        file: String,
-        /// Only run specific rules (comma-separated)
-        #[arg(long, value_delimiter = ',')]
-        rules: Option<Vec<String>>,
-        /// Minimum severity to display
-        #[arg(long, default_value = "info")]
-        severity: Severity,
-    },
     /// Fix issues by rewriting the parquet file
     Fix {
         /// File path or URL (local, s3://, https://)
@@ -46,11 +49,13 @@ enum Command {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Check {
-            file,
-            rules,
-            severity,
-        } => {
+        None => {
+            let file = cli
+                .file
+                .ok_or_else(|| anyhow::anyhow!("missing FILE argument for check mode"))?;
+            let severity = cli.severity.unwrap_or(Severity::Info);
+            let rules = cli.rules;
+
             let (store, path) = parquet_linter::loader::parse(&file)?;
             let diagnostics =
                 parquet_linter::lint(store, path, rules.as_deref()).await?;
@@ -74,12 +79,12 @@ async fn main() -> Result<()> {
                 process::exit(1);
             }
         }
-        Command::Fix {
+        Some(Command::Fix {
             file,
             output,
             rules,
             dry_run,
-        } => {
+        }) => {
             let (store, path) = parquet_linter::loader::parse(&file)?;
             let diagnostics =
                 parquet_linter::lint(store.clone(), path.clone(), rules.as_deref()).await?;

@@ -12,7 +12,10 @@ const HIGH_CARDINALITY_RATIO: f64 = 0.5;
 /// Below this ratio, dictionary encoding is clearly beneficial.
 const LOW_CARDINALITY_RATIO: f64 = 0.1;
 const LARGE_DICT_PAGE_SIZE: usize = 2 * 1024 * 1024; // 2 MB
+const MAX_DICT_PAGE_SIZE: usize = 16 * 1024 * 1024; // 16 MB
 const AMBIGUOUS_GROUP_SAMPLE_RATIO: f64 = 0.05;
+const DICTIONARY_PAGE_SIZE_HEADROOM_NUMERATOR: u128 = 5;
+const DICTIONARY_PAGE_SIZE_HEADROOM_DENOMINATOR: u128 = 4;
 
 /// Dictionary fallback detection notes:
 /// - Dictionary page itself is encoded with `PLAIN` in Parquet.
@@ -167,6 +170,96 @@ fn choose_sample_row_groups(indices: &[usize]) -> Vec<usize> {
         .collect()
 }
 
+fn div_ceil_u128(numerator: u128, denominator: u128) -> Option<u128> {
+    if denominator == 0 {
+        return None;
+    }
+    numerator
+        .checked_add(denominator - 1)
+        .map(|v| v / denominator)
+}
+
+fn estimate_dictionary_payload_bytes(
+    distinct_count: u64,
+    total_values: u128,
+    total_uncompressed_bytes: u128,
+) -> Option<u128> {
+    if distinct_count == 0 || total_values == 0 || total_uncompressed_bytes == 0 {
+        return None;
+    }
+
+    let distinct_count = u128::from(distinct_count);
+    let payload = div_ceil_u128(
+        total_uncompressed_bytes.checked_mul(distinct_count)?,
+        total_values,
+    )?;
+    div_ceil_u128(
+        payload.checked_mul(DICTIONARY_PAGE_SIZE_HEADROOM_NUMERATOR)?,
+        DICTIONARY_PAGE_SIZE_HEADROOM_DENOMINATOR,
+    )
+}
+
+fn suggested_dictionary_page_size_limit(estimated_payload_bytes: Option<u128>) -> usize {
+    let Some(estimated_payload_bytes) = estimated_payload_bytes else {
+        return LARGE_DICT_PAGE_SIZE;
+    };
+
+    let mut suggested = LARGE_DICT_PAGE_SIZE as u128;
+    while suggested < estimated_payload_bytes {
+        let next = suggested.saturating_mul(2);
+        if next == suggested {
+            break;
+        }
+        suggested = next;
+    }
+
+    suggested.min(usize::MAX as u128) as usize
+}
+
+fn largest_row_group_rows(row_groups: &[parquet::file::metadata::RowGroupMetaData]) -> usize {
+    row_groups
+        .iter()
+        .map(|row_group| row_group.num_rows())
+        .filter(|&rows| rows > 0)
+        .max()
+        .unwrap_or(1) as usize
+}
+
+fn suggested_max_row_group_size(
+    current_max_rows: usize,
+    uncapped_dictionary_page_size: usize,
+) -> usize {
+    if current_max_rows == 0 || uncapped_dictionary_page_size <= MAX_DICT_PAGE_SIZE {
+        return current_max_rows.max(1);
+    }
+
+    let scaled = (current_max_rows as u128)
+        .saturating_mul(MAX_DICT_PAGE_SIZE as u128)
+        / (uncapped_dictionary_page_size as u128);
+    scaled.max(1).min(usize::MAX as u128) as usize
+}
+
+fn column_size_totals(
+    row_groups: &[parquet::file::metadata::RowGroupMetaData],
+    col_idx: usize,
+) -> (u128, u128) {
+    let mut total_values = 0u128;
+    let mut total_uncompressed_bytes = 0u128;
+
+    for row_group in row_groups {
+        let col = row_group.column(col_idx);
+        let num_values = col.num_values();
+        let uncompressed_size = col.uncompressed_size();
+        if num_values <= 0 || uncompressed_size <= 0 {
+            continue;
+        }
+        total_values += num_values as u128;
+        total_uncompressed_bytes += uncompressed_size as u128;
+    }
+
+    (total_values, total_uncompressed_bytes)
+}
+
 async fn classify_from_sampled_pages(
     ctx: &RuleContext,
     row_group_idx: usize,
@@ -295,28 +388,69 @@ impl Rule for DictionaryEncodingRule {
                         location,
                         message: format!(
                             "dictionary data pages fell back to PLAIN in {fallback_groups}/{non_empty_groups} row groups{sampled_suffix}; \
-                             estimated cardinality is high (~{} distinct / {} total = {:.0}%), \
+                             estimated cardinality is high (~{} distinct / {} non-null = {:.0}%), \
                              dictionary encoding is not beneficial",
-                            card.distinct_count, card.total_count, ratio * 100.0
+                            card.distinct_count, card.non_null_count, ratio * 100.0
                         ),
                         fixes: vec![FixAction::SetColumnDictionaryEnabled(path, false)],
                     });
                 } else {
-                    diagnostics.push(Diagnostic {
-                        rule_name: self.name(),
-                        severity: Severity::Warning,
-                        location,
-                        message: format!(
-                            "dictionary data pages fell back to PLAIN in {fallback_groups}/{non_empty_groups} row groups{sampled_suffix}; \
-                             estimated cardinality is moderate (~{} distinct / {} total = {:.0}%), \
-                             dictionary page size may be too small",
-                            card.distinct_count, card.total_count, ratio * 100.0
+                    let (total_values, total_uncompressed_bytes) =
+                        column_size_totals(row_groups, col_idx);
+                    let uncapped_dict_page_size = suggested_dictionary_page_size_limit(
+                        estimate_dictionary_payload_bytes(
+                            card.distinct_count,
+                            total_values,
+                            total_uncompressed_bytes,
                         ),
-                        fixes: vec![FixAction::SetColumnDictionaryPageSizeLimit(
-                            path,
-                            LARGE_DICT_PAGE_SIZE,
-                        )],
-                    });
+                    );
+                    let capped_dict_page_size = uncapped_dict_page_size.min(MAX_DICT_PAGE_SIZE);
+
+                    if uncapped_dict_page_size > MAX_DICT_PAGE_SIZE {
+                        let current_max_rows = largest_row_group_rows(row_groups);
+                        let target_max_rows = suggested_max_row_group_size(
+                            current_max_rows,
+                            uncapped_dict_page_size,
+                        );
+                        diagnostics.push(Diagnostic {
+                            rule_name: self.name(),
+                            severity: Severity::Warning,
+                            location,
+                            message: format!(
+                                "dictionary data pages fell back to PLAIN in {fallback_groups}/{non_empty_groups} row groups{sampled_suffix}; \
+                                 estimated cardinality is moderate (~{} distinct / {} non-null = {:.0}%), \
+                                 required dictionary page size appears larger than {}MB; cap dictionary_page_size_limit at {}MB and reduce row-group size (for example, max_row_group_size={target_max_rows})",
+                                card.distinct_count,
+                                card.non_null_count,
+                                ratio * 100.0,
+                                MAX_DICT_PAGE_SIZE / 1024 / 1024,
+                                MAX_DICT_PAGE_SIZE / 1024 / 1024
+                            ),
+                            fixes: vec![
+                                FixAction::SetColumnDictionaryPageSizeLimit(
+                                    path.clone(),
+                                    capped_dict_page_size,
+                                ),
+                                FixAction::SetMaxRowGroupSize(target_max_rows),
+                            ],
+                        });
+                    } else {
+                        diagnostics.push(Diagnostic {
+                            rule_name: self.name(),
+                            severity: Severity::Warning,
+                            location,
+                            message: format!(
+                                "dictionary data pages fell back to PLAIN in {fallback_groups}/{non_empty_groups} row groups{sampled_suffix}; \
+                                 estimated cardinality is moderate (~{} distinct / {} non-null = {:.0}%), \
+                                 dictionary page size may be too small",
+                                card.distinct_count, card.non_null_count, ratio * 100.0
+                            ),
+                            fixes: vec![FixAction::SetColumnDictionaryPageSizeLimit(
+                                path,
+                                capped_dict_page_size,
+                            )],
+                        });
+                    }
                 }
                 continue;
             }
@@ -328,14 +462,62 @@ impl Rule for DictionaryEncodingRule {
                     severity: Severity::Info,
                     location,
                     message: format!(
-                        "low cardinality (~{} distinct / {} total = {:.0}%) and no dictionary in \
+                        "low cardinality (~{} distinct / {} non-null = {:.0}%) and no dictionary in \
                          {no_dict_groups}/{non_empty_groups} row groups; consider enabling dictionary encoding",
-                        card.distinct_count, card.total_count, ratio * 100.0
+                        card.distinct_count, card.non_null_count, ratio * 100.0
                     ),
                     fixes: vec![FixAction::SetColumnDictionaryEnabled(path, true)],
                 });
             }
         }
         diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn estimate_payload_bytes_applies_headroom() {
+        let got = estimate_dictionary_payload_bytes(100, 1_000, 10_000_000);
+        assert_eq!(got, Some(1_250_000));
+    }
+
+    #[test]
+    fn suggest_dictionary_page_size_defaults_to_2mb() {
+        assert_eq!(suggested_dictionary_page_size_limit(None), 2 * 1024 * 1024);
+        assert_eq!(
+            suggested_dictionary_page_size_limit(Some(2 * 1024 * 1024)),
+            2 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn suggest_dictionary_page_size_doubles_until_estimate_fits() {
+        assert_eq!(
+            suggested_dictionary_page_size_limit(Some((2 * 1024 * 1024) as u128 + 1)),
+            4 * 1024 * 1024
+        );
+        assert_eq!(
+            suggested_dictionary_page_size_limit(Some((5 * 1024 * 1024) as u128)),
+            8 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn suggest_max_row_group_size_scales_down_when_limit_exceeds_cap() {
+        assert_eq!(
+            suggested_max_row_group_size(1_000_000, 128 * 1024 * 1024),
+            125_000
+        );
+    }
+
+    #[test]
+    fn suggest_max_row_group_size_keeps_rows_when_within_cap() {
+        assert_eq!(
+            suggested_max_row_group_size(1_000_000, 8 * 1024 * 1024),
+            1_000_000
+        );
     }
 }

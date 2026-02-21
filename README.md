@@ -1,4 +1,4 @@
-# parquet-lint
+# parquet-linter
 
 A linter for Parquet files. Analyzes metadata to detect suboptimal encoding, compression, and configuration, then optionally rewrites files with fixes applied.
 
@@ -6,16 +6,16 @@ A linter for Parquet files. Analyzes metadata to detect suboptimal encoding, com
 
 ```bash
 # Check for issues
-parquet-lint check data.parquet
+parquet-linter data.parquet
 
 # Check with filters
-parquet-lint check data.parquet --severity warning --rules low-compression-ratio,float-byte-stream-split
+parquet-linter data.parquet --severity warning --rules low-compression-ratio,float-byte-stream-split
 
 # Fix issues (rewrite file)
-parquet-lint fix data.parquet -o fixed.parquet
+parquet-linter fix data.parquet -o fixed.parquet
 
 # Preview fixes without writing
-parquet-lint fix data.parquet -o fixed.parquet --dry-run
+parquet-linter fix data.parquet -o fixed.parquet --dry-run
 ```
 
 ## Rules
@@ -33,6 +33,11 @@ parquet-lint fix data.parquet -o fixed.parquet --dry-run
 | `compression-codec-upgrade` | info | GZIP or deprecated LZ4 instead of ZSTD |
 | `timestamp-delta-encoding` | info | Timestamp/date columns using PLAIN instead of DELTA_BINARY_PACKED |
 | `oversized-string-statistics` | warning | Untruncated string statistics > 64 bytes |
+
+## Cardinality Estimation
+
+- Distinct cardinality excludes `NULL` values.
+- Cardinality ratio uses non-null counts when column `null_count` statistics are available; if missing, it falls back to a conservative estimate.
 
 ## Build
 

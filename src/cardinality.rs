@@ -3,7 +3,7 @@ use arrow_array::*;
 use futures::StreamExt;
 use parquet::arrow::async_reader::ParquetObjectReader;
 use parquet::column::page::Page;
-use parquet::file::metadata::ParquetMetaData;
+use parquet::file::metadata::{ColumnChunkMetaData, ParquetMetaData};
 use std::collections::HashSet;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -11,15 +11,15 @@ use crate::rule;
 
 pub struct ColumnCardinality {
     pub distinct_count: u64,
-    pub total_count: u64,
+    pub non_null_count: u64,
 }
 
 impl ColumnCardinality {
     pub fn ratio(&self) -> f64 {
-        if self.total_count == 0 {
-            1.0
+        if self.non_null_count == 0 {
+            0.0
         } else {
-            self.distinct_count as f64 / self.total_count as f64
+            self.distinct_count as f64 / self.non_null_count as f64
         }
     }
 }
@@ -40,14 +40,14 @@ pub async fn estimate(
     }
 
     let sample_rg_idx = pick_sample_row_group(metadata);
-    let totals = total_values_per_column(metadata, num_cols);
+    let totals = total_non_null_values_per_column(metadata, num_cols);
     let mut result: Vec<Option<ColumnCardinality>> = (0..num_cols).map(|_| None).collect();
 
     for col_idx in 0..num_cols {
-        let total = totals[col_idx];
+        let total_non_null = totals[col_idx];
         let sample_col = metadata.row_group(sample_rg_idx).column(col_idx);
-        let sample_total = sample_col.num_values() as u64;
-        if sample_total == 0 {
+        let sample_non_null = column_non_null_count(sample_col);
+        if sample_non_null == 0 {
             continue;
         }
 
@@ -55,11 +55,11 @@ pub async fn estimate(
         if let Some(dc) = sample_col
             .statistics()
             .and_then(|s| s.distinct_count_opt())
-            .map(|dc| dc.min(sample_total))
+            .map(|dc| dc.min(sample_non_null))
         {
             result[col_idx] = Some(ColumnCardinality {
-                distinct_count: scale_distinct(dc, sample_total, total),
-                total_count: total,
+                distinct_count: scale_distinct(dc, sample_non_null, total_non_null),
+                non_null_count: total_non_null,
             });
             continue;
         }
@@ -68,8 +68,13 @@ pub async fn estimate(
         if let Some(dc) = dictionary_distinct_count(reader, metadata, sample_rg_idx, col_idx).await
         {
             result[col_idx] = Some(ColumnCardinality {
-                distinct_count: scale_distinct(dc.min(sample_total), sample_total, total).max(dc),
-                total_count: total,
+                distinct_count: scale_distinct(
+                    dc.min(sample_non_null),
+                    sample_non_null,
+                    total_non_null,
+                )
+                .max(dc.min(total_non_null)),
+                non_null_count: total_non_null,
             });
         }
     }
@@ -93,7 +98,7 @@ pub async fn estimate(
             let total = totals[col_idx];
             card.unwrap_or(ColumnCardinality {
                 distinct_count: total,
-                total_count: total,
+                non_null_count: total,
             })
         })
         .collect())
@@ -107,14 +112,28 @@ fn pick_sample_row_group(metadata: &ParquetMetaData) -> usize {
         .unwrap_or(0)
 }
 
-fn total_values_per_column(metadata: &ParquetMetaData, num_cols: usize) -> Vec<u64> {
+fn total_non_null_values_per_column(metadata: &ParquetMetaData, num_cols: usize) -> Vec<u64> {
     let mut totals = vec![0u64; num_cols];
     for rg in metadata.row_groups() {
         for (col_idx, total) in totals.iter_mut().enumerate() {
-            *total += rg.column(col_idx).num_values() as u64;
+            *total += column_non_null_count(rg.column(col_idx));
         }
     }
     totals
+}
+
+fn column_non_null_count(col: &ColumnChunkMetaData) -> u64 {
+    if col.num_values() <= 0 {
+        return 0;
+    }
+
+    let total = col.num_values() as u64;
+    let null_count = col
+        .statistics()
+        .and_then(|statistics| statistics.null_count_opt())
+        .unwrap_or(0)
+        .min(total);
+    total.saturating_sub(null_count)
 }
 
 fn scale_distinct(sample_distinct: u64, sample_total: u64, full_total: u64) -> u64 {
@@ -151,7 +170,7 @@ async fn dictionary_distinct_count(
 async fn sample_cardinalities(
     reader: &ParquetObjectReader,
     metadata: &ParquetMetaData,
-    totals: &[u64],
+    non_null_totals: &[u64],
     sample_rg_idx: usize,
     columns: &[usize],
     result: &mut [Option<ColumnCardinality>],
@@ -172,33 +191,39 @@ async fn sample_cardinalities(
     let mut stream = builder.with_projection(mask).build()?;
 
     let mut sets: Vec<HashSet<u64>> = vec![HashSet::new(); columns.len()];
-    let mut sample_rows = 0u64;
+    let mut sample_non_null_counts = vec![0u64; columns.len()];
 
     while let Some(batch_result) = stream.next().await {
         let batch = batch_result?;
         // Projected batch columns are in order of `columns`
         for (i, _col_idx) in columns.iter().enumerate() {
-            hash_array_values(batch.column(i).as_ref(), &mut sets[i]);
+            let array = batch.column(i).as_ref();
+            hash_array_values(array, &mut sets[i]);
+            sample_non_null_counts[i] += (array.len() - array.null_count()) as u64;
         }
-        sample_rows += batch.num_rows() as u64;
     }
 
-    if sample_rows == 0 {
+    if sample_non_null_counts.iter().all(|count| *count == 0) {
         return Ok(());
     }
 
     for (i, &col_idx) in columns.iter().enumerate() {
-        let sample_distinct = sets[i].len() as u64;
-        let total = totals[col_idx];
-        let estimated = scale_distinct(sample_distinct, sample_rows, total);
+        let sample_non_null = sample_non_null_counts[i];
+        if sample_non_null == 0 {
+            continue;
+        }
 
-        let sampled = estimated.max(sample_distinct).min(total);
+        let sample_distinct = sets[i].len() as u64;
+        let total_non_null = non_null_totals[col_idx];
+        let estimated = scale_distinct(sample_distinct, sample_non_null, total_non_null);
+
+        let sampled = estimated.max(sample_distinct).min(total_non_null);
         if let Some(existing) = result[col_idx].as_mut() {
-            existing.distinct_count = existing.distinct_count.max(sampled).min(total);
+            existing.distinct_count = existing.distinct_count.max(sampled).min(total_non_null);
         } else {
             result[col_idx] = Some(ColumnCardinality {
                 distinct_count: sampled,
-                total_count: total,
+                non_null_count: total_non_null,
             });
         }
     }
@@ -209,12 +234,33 @@ async fn sample_cardinalities(
 fn hash_array_values(array: &dyn Array, set: &mut HashSet<u64>) {
     for i in 0..array.len() {
         if array.is_null(i) {
-            set.insert(u64::MAX);
             continue;
         }
         let mut hasher = DefaultHasher::new();
         hash_value(array, i, &mut hasher);
         set.insert(hasher.finish());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ratio_is_zero_when_column_has_no_non_null_values() {
+        let card = ColumnCardinality {
+            distinct_count: 0,
+            non_null_count: 0,
+        };
+        assert_eq!(card.ratio(), 0.0);
+    }
+
+    #[test]
+    fn sampling_distinct_ignores_null_values() {
+        let array = StringArray::from(vec![Some("a"), None, Some("a"), None]);
+        let mut set = HashSet::new();
+        hash_array_values(&array, &mut set);
+        assert_eq!(set.len(), 1);
     }
 }
 
