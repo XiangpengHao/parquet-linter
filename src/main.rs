@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::process;
 
 use parquet_linter::diagnostic::Severity;
+use parquet_linter::prescription::Prescription;
 
 #[derive(Parser)]
 #[command(
@@ -88,28 +89,38 @@ async fn main() -> Result<()> {
             let (store, path) = parquet_linter::loader::parse(&file)?;
             let diagnostics =
                 parquet_linter::lint(store.clone(), path.clone(), rules.as_deref()).await?;
-            let all_fixes: Vec<_> = diagnostics.iter().flat_map(|d| d.fixes.clone()).collect();
+            let mut prescription = Prescription::new();
+            for diagnostic in &diagnostics {
+                prescription.extend(diagnostic.prescription.clone());
+            }
 
-            if all_fixes.is_empty() {
+            if prescription.is_empty() {
                 println!("{}", "No fixes to apply. ✓".green().bold());
                 return Ok(());
             }
 
-            for d in &diagnostics {
-                if !d.fixes.is_empty() {
-                    d.print_colored();
-                    println!();
+            prescription.validate()?;
+
+            for diagnostic in &diagnostics {
+                if diagnostic.prescription.is_empty() {
+                    continue;
                 }
+                diagnostic.print_colored();
+                println!();
             }
 
             if dry_run {
-                let msg = format!("Dry run: {} fix action(s) would be applied.", all_fixes.len());
-                println!("{}", msg.cyan().bold());
-            } else {
-                parquet_linter::fix::rewrite(store, path, &output, &all_fixes).await?;
                 let msg = format!(
-                    "Applied {} fix action(s), wrote {}",
-                    all_fixes.len(),
+                    "Dry run: {} directive(s) would be applied:",
+                    prescription.directives().len()
+                );
+                println!("{}", msg.cyan().bold());
+                println!("{prescription}");
+            } else {
+                parquet_linter::fix::rewrite(store, path, &output, &prescription).await?;
+                let msg = format!(
+                    "Applied {} directive(s), wrote {}",
+                    prescription.directives().len(),
                     output.display()
                 );
                 println!("{}", msg.green().bold());

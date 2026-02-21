@@ -2,6 +2,7 @@ pub mod cardinality;
 pub mod diagnostic;
 pub mod fix;
 pub mod loader;
+pub mod prescription;
 pub mod rule;
 pub mod rules;
 

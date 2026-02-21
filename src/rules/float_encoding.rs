@@ -1,4 +1,5 @@
-use crate::diagnostic::{Diagnostic, FixAction, Location, Severity};
+use crate::diagnostic::{Diagnostic, Location, Severity};
+use crate::prescription::{DataEncoding, Directive, Prescription};
 use crate::rule::{Rule, RuleContext};
 use parquet::basic::{Encoding, Type as PhysicalType};
 
@@ -64,6 +65,11 @@ impl Rule for FloatEncodingRule {
 
             if plain_without_bss_groups > 0 {
                 let path = col0.column_path().clone();
+                let mut prescription = Prescription::new();
+                prescription.push(Directive::SetColumnEncoding(
+                    path.clone(),
+                    DataEncoding::ByteStreamSplit,
+                ));
                 diagnostics.push(Diagnostic {
                     rule_name: self.name(),
                     severity: Severity::Suggestion,
@@ -76,10 +82,7 @@ impl Rule for FloatEncodingRule {
                          {plain_without_bss_groups}/{non_empty_groups} row groups; \
                          BYTE_STREAM_SPLIT typically compresses 2-4x better"
                     ),
-                    fixes: vec![FixAction::SetColumnEncoding(
-                        path,
-                        Encoding::BYTE_STREAM_SPLIT,
-                    )],
+                    prescription,
                 });
             }
         }

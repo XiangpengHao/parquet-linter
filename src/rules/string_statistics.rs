@@ -1,4 +1,5 @@
-use crate::diagnostic::{Diagnostic, FixAction, Location, Severity};
+use crate::diagnostic::{Diagnostic, Location, Severity};
+use crate::prescription::{Directive, Prescription};
 use crate::rule::{Rule, RuleContext};
 use parquet::basic::Type as PhysicalType;
 
@@ -54,6 +55,10 @@ impl Rule for StringStatisticsRule {
 
             if affected_groups > 0 {
                 let path = col0.column_path().clone();
+                let mut prescription = Prescription::new();
+                prescription.push(Directive::SetFileStatisticsTruncateLength(Some(
+                    MAX_STAT_LENGTH,
+                )));
                 diagnostics.push(Diagnostic {
                     rule_name: self.name(),
                     severity: Severity::Warning,
@@ -67,7 +72,7 @@ impl Rule for StringStatisticsRule {
                          consider truncating to {MAX_STAT_LENGTH} bytes",
                         row_groups.len()
                     ),
-                    fixes: vec![FixAction::SetStatisticsTruncateLength(Some(MAX_STAT_LENGTH))],
+                    prescription,
                 });
             }
         }

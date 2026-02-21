@@ -1,4 +1,5 @@
-use crate::diagnostic::{Diagnostic, FixAction, Location, Severity};
+use crate::diagnostic::{Diagnostic, Location, Severity};
+use crate::prescription::{DataEncoding, Directive, Prescription};
 use crate::rule::{Rule, RuleContext};
 use parquet::basic::{Encoding, LogicalType, Type as PhysicalType};
 
@@ -64,6 +65,11 @@ impl Rule for TimestampEncodingRule {
 
             if plain_without_delta_groups > 0 {
                 let path = col0.column_path().clone();
+                let mut prescription = Prescription::new();
+                prescription.push(Directive::SetColumnEncoding(
+                    path.clone(),
+                    DataEncoding::DeltaBinaryPacked,
+                ));
                 diagnostics.push(Diagnostic {
                     rule_name: self.name(),
                     severity: Severity::Suggestion,
@@ -76,10 +82,7 @@ impl Rule for TimestampEncodingRule {
                          {plain_without_delta_groups}/{non_empty_groups} row groups; \
                          DELTA_BINARY_PACKED is typically more efficient for temporal data"
                     ),
-                    fixes: vec![FixAction::SetColumnEncoding(
-                        path,
-                        Encoding::DELTA_BINARY_PACKED,
-                    )],
+                    prescription,
                 });
             }
         }

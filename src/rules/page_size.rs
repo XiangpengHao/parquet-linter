@@ -1,4 +1,5 @@
-use crate::diagnostic::{Diagnostic, FixAction, Location, Severity};
+use crate::diagnostic::{Diagnostic, Location, Severity};
+use crate::prescription::{Directive, Prescription};
 use crate::rule::{Rule, RuleContext};
 
 pub struct PageSizeRule;
@@ -95,15 +96,16 @@ impl Rule for PageSizeRule {
             return Vec::new();
         };
 
+        let mut prescription = Prescription::new();
+        prescription.push(Directive::SetFileMaxRowGroupSize(suggestion.target_max_rows));
+        prescription.push(Directive::SetFileDataPageSizeLimit(IDEAL_DATA_PAGE_SIZE_LIMIT));
+
         vec![Diagnostic {
             rule_name: self.name(),
             severity: Severity::Warning,
             location: Location::File,
             message: build_policy_message(suggestion, row_groups.len()),
-            fixes: vec![
-                FixAction::SetMaxRowGroupSize(suggestion.target_max_rows),
-                FixAction::SetDataPageSizeLimit(IDEAL_DATA_PAGE_SIZE_LIMIT),
-            ],
+            prescription,
         }]
     }
 }

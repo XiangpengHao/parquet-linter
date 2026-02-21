@@ -1,8 +1,8 @@
 use colored::Colorize;
-use parquet::basic::{Compression, Encoding};
-use parquet::file::properties::EnabledStatistics;
 use parquet::schema::types::ColumnPath;
 use std::fmt;
+
+use crate::prescription::Prescription;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
@@ -52,57 +52,12 @@ impl fmt::Display for Location {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum FixAction {
-    SetDataPageSizeLimit(usize),
-    SetMaxRowGroupSize(usize),
-    SetColumnCompression(ColumnPath, Compression),
-    SetColumnEncoding(ColumnPath, Encoding),
-    SetColumnDictionaryEnabled(ColumnPath, bool),
-    SetColumnDictionaryPageSizeLimit(ColumnPath, usize),
-    SetColumnStatisticsEnabled(ColumnPath, EnabledStatistics),
-    SetColumnBloomFilterEnabled(ColumnPath, bool),
-    SetColumnBloomFilterNdv(ColumnPath, u64),
-    SetStatisticsTruncateLength(Option<usize>),
-    SetCompression(Compression),
-}
-
-impl fmt::Display for FixAction {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FixAction::SetDataPageSizeLimit(v) => write!(f, "set data_page_size_limit={v}"),
-            FixAction::SetMaxRowGroupSize(v) => write!(f, "set max_row_group_size={v}"),
-            FixAction::SetColumnCompression(col, c) => write!(f, "set {col} compression={c:?}"),
-            FixAction::SetColumnEncoding(col, e) => write!(f, "set {col} encoding={e:?}"),
-            FixAction::SetColumnDictionaryEnabled(col, v) => {
-                write!(f, "set {col} dictionary_enabled={v}")
-            }
-            FixAction::SetColumnDictionaryPageSizeLimit(col, v) => {
-                write!(f, "set {col} dictionary_page_size_limit={v}")
-            }
-            FixAction::SetColumnStatisticsEnabled(col, v) => {
-                write!(f, "set {col} statistics_enabled={v:?}")
-            }
-            FixAction::SetColumnBloomFilterEnabled(col, v) => {
-                write!(f, "set {col} bloom_filter_enabled={v}")
-            }
-            FixAction::SetColumnBloomFilterNdv(col, v) => {
-                write!(f, "set {col} bloom_filter_ndv={v}")
-            }
-            FixAction::SetStatisticsTruncateLength(v) => {
-                write!(f, "set statistics_truncate_length={v:?}")
-            }
-            FixAction::SetCompression(c) => write!(f, "set compression={c:?}"),
-        }
-    }
-}
-
 pub struct Diagnostic {
     pub rule_name: &'static str,
     pub severity: Severity,
     pub location: Location,
     pub message: String,
-    pub fixes: Vec<FixAction>,
+    pub prescription: Prescription,
 }
 
 impl Diagnostic {
@@ -117,8 +72,8 @@ impl Diagnostic {
         println!("{severity_str} {rule}");
         println!("  {} {location}", "-->".dimmed());
         println!("  {}", self.message);
-        for fix in &self.fixes {
-            println!("  {} {fix}", "fix:".green().bold());
+        for directive in self.prescription.directives() {
+            println!("  {} {directive}", "fix:".green().bold());
         }
     }
 }
@@ -130,8 +85,8 @@ impl fmt::Display for Diagnostic {
             "[{}] {} @ {}: {}",
             self.severity, self.rule_name, self.location, self.message
         )?;
-        for fix in &self.fixes {
-            write!(f, "\n  fix: {fix}")?;
+        for directive in self.prescription.directives() {
+            write!(f, "\n  fix: {directive}")?;
         }
         Ok(())
     }

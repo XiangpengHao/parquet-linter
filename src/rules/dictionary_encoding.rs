@@ -1,4 +1,5 @@
-use crate::diagnostic::{Diagnostic, FixAction, Location, Severity};
+use crate::diagnostic::{Diagnostic, Location, Severity};
+use crate::prescription::{Directive, Prescription};
 use crate::rule::{self, Rule, RuleContext};
 use parquet::basic::Encoding;
 use parquet::basic::PageType;
@@ -382,6 +383,8 @@ impl Rule for DictionaryEncodingRule {
                     )
                 };
                 if ratio > HIGH_CARDINALITY_RATIO {
+                    let mut prescription = Prescription::new();
+                    prescription.push(Directive::SetColumnDictionary(path.clone(), false));
                     diagnostics.push(Diagnostic {
                         rule_name: self.name(),
                         severity: Severity::Warning,
@@ -392,7 +395,7 @@ impl Rule for DictionaryEncodingRule {
                              dictionary encoding is not beneficial",
                             card.distinct_count, card.non_null_count, ratio * 100.0
                         ),
-                        fixes: vec![FixAction::SetColumnDictionaryEnabled(path, false)],
+                        prescription,
                     });
                 } else {
                     let (total_values, total_uncompressed_bytes) =
@@ -412,6 +415,12 @@ impl Rule for DictionaryEncodingRule {
                             current_max_rows,
                             uncapped_dict_page_size,
                         );
+                        let mut prescription = Prescription::new();
+                        prescription.push(Directive::SetColumnDictionaryPageSizeLimit(
+                            path.clone(),
+                            capped_dict_page_size,
+                        ));
+                        prescription.push(Directive::SetFileMaxRowGroupSize(target_max_rows));
                         diagnostics.push(Diagnostic {
                             rule_name: self.name(),
                             severity: Severity::Warning,
@@ -426,15 +435,14 @@ impl Rule for DictionaryEncodingRule {
                                 MAX_DICT_PAGE_SIZE / 1024 / 1024,
                                 MAX_DICT_PAGE_SIZE / 1024 / 1024
                             ),
-                            fixes: vec![
-                                FixAction::SetColumnDictionaryPageSizeLimit(
-                                    path.clone(),
-                                    capped_dict_page_size,
-                                ),
-                                FixAction::SetMaxRowGroupSize(target_max_rows),
-                            ],
+                            prescription,
                         });
                     } else {
+                        let mut prescription = Prescription::new();
+                        prescription.push(Directive::SetColumnDictionaryPageSizeLimit(
+                            path.clone(),
+                            capped_dict_page_size,
+                        ));
                         diagnostics.push(Diagnostic {
                             rule_name: self.name(),
                             severity: Severity::Warning,
@@ -445,10 +453,7 @@ impl Rule for DictionaryEncodingRule {
                                  dictionary page size may be too small",
                                 card.distinct_count, card.non_null_count, ratio * 100.0
                             ),
-                            fixes: vec![FixAction::SetColumnDictionaryPageSizeLimit(
-                                path,
-                                capped_dict_page_size,
-                            )],
+                            prescription,
                         });
                     }
                 }
@@ -457,6 +462,8 @@ impl Rule for DictionaryEncodingRule {
 
             // No dictionary, but cardinality is low → suggest enabling.
             if no_dict_groups > 0 && ratio < LOW_CARDINALITY_RATIO {
+                let mut prescription = Prescription::new();
+                prescription.push(Directive::SetColumnDictionary(path.clone(), true));
                 diagnostics.push(Diagnostic {
                     rule_name: self.name(),
                     severity: Severity::Suggestion,
@@ -466,7 +473,7 @@ impl Rule for DictionaryEncodingRule {
                          {no_dict_groups}/{non_empty_groups} row groups; consider enabling dictionary encoding",
                         card.distinct_count, card.non_null_count, ratio * 100.0
                     ),
-                    fixes: vec![FixAction::SetColumnDictionaryEnabled(path, true)],
+                    prescription,
                 });
             }
         }

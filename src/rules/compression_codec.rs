@@ -1,6 +1,7 @@
-use crate::diagnostic::{Diagnostic, FixAction, Location, Severity};
+use crate::diagnostic::{Diagnostic, Location, Severity};
+use crate::prescription::{Codec, Directive, Prescription};
 use crate::rule::{Rule, RuleContext};
-use parquet::basic::{Compression, ZstdLevel};
+use parquet::basic::Compression;
 
 pub struct CompressionCodecRule;
 
@@ -14,12 +15,10 @@ enum CodecRecommendation {
 }
 
 impl CodecRecommendation {
-    fn target(self) -> Compression {
+    fn target(self) -> Codec {
         match self {
-            CodecRecommendation::ZstdLevel3 => {
-                Compression::ZSTD(ZstdLevel::try_new(TARGET_ZSTD_LEVEL).expect("valid zstd level"))
-            }
-            CodecRecommendation::Lz4 => Compression::LZ4,
+            CodecRecommendation::ZstdLevel3 => Codec::Zstd(TARGET_ZSTD_LEVEL),
+            CodecRecommendation::Lz4 => Codec::Lz4Raw,
         }
     }
 
@@ -35,7 +34,8 @@ fn classify_codec_issue(
     compression: Compression,
     uncompressed_size: i64,
 ) -> Option<(CodecRecommendation, &'static str)> {
-    let target_zstd = CodecRecommendation::ZstdLevel3.target();
+    let is_target_zstd =
+        matches!(compression, Compression::ZSTD(level) if level.compression_level() == TARGET_ZSTD_LEVEL);
     let speed_sensitive = uncompressed_size > LARGE_UNCOMPRESSED_COLUMN_BYTES;
 
     if speed_sensitive && matches!(compression, Compression::UNCOMPRESSED | Compression::SNAPPY) {
@@ -45,7 +45,7 @@ fn classify_codec_issue(
         ));
     }
 
-    if compression == target_zstd {
+    if is_target_zstd {
         None
     } else {
         Some((
@@ -108,6 +108,11 @@ impl Rule for CompressionCodecRule {
 
             if let Some((recommendation, problematic_groups, (compression, reason))) = chosen {
                 let path = row_groups[0].column(col_idx).column_path().clone();
+                let mut prescription = Prescription::new();
+                prescription.push(Directive::SetColumnCompression(
+                    path.clone(),
+                    recommendation.target(),
+                ));
                 diagnostics.push(Diagnostic {
                     rule_name: self.name(),
                     severity: match recommendation {
@@ -126,7 +131,7 @@ impl Rule for CompressionCodecRule {
                         reason,
                         recommendation.advice()
                     ),
-                    fixes: vec![FixAction::SetColumnCompression(path, recommendation.target())],
+                    prescription,
                 });
             }
         }
@@ -137,7 +142,7 @@ impl Rule for CompressionCodecRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use parquet::basic::GzipLevel;
+    use parquet::basic::{GzipLevel, ZstdLevel};
 
     #[test]
     fn classify_gzip_as_zstd_level_3() {

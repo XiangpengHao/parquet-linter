@@ -1,4 +1,5 @@
-use crate::diagnostic::{Diagnostic, FixAction, Location, Severity};
+use crate::diagnostic::{Diagnostic, Location, Severity};
+use crate::prescription::{Codec, Directive, Prescription};
 use crate::rule::{Rule, RuleContext};
 use parquet::basic::Compression;
 
@@ -49,6 +50,11 @@ impl Rule for CompressionRatioRule {
                     continue;
                 };
                 let path = row_groups[0].column(col_idx).column_path().clone();
+                let mut prescription = Prescription::new();
+                prescription.push(Directive::SetColumnCompression(
+                    path.clone(),
+                    Codec::Uncompressed,
+                ));
                 diagnostics.push(Diagnostic {
                     rule_name: self.name(),
                     severity: Severity::Warning,
@@ -62,10 +68,7 @@ impl Rule for CompressionRatioRule {
                         compression,
                         row_groups.len()
                     ),
-                    fixes: vec![FixAction::SetColumnCompression(
-                        path,
-                        Compression::UNCOMPRESSED,
-                    )],
+                    prescription,
                 });
             }
         }

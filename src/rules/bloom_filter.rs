@@ -1,4 +1,5 @@
-use crate::diagnostic::{Diagnostic, FixAction, Location, Severity};
+use crate::diagnostic::{Diagnostic, Location, Severity};
+use crate::prescription::{Directive, Prescription};
 use crate::rule::{Rule, RuleContext};
 use parquet::basic::LogicalType;
 use parquet::basic::Type as PhysicalType;
@@ -58,6 +59,9 @@ impl Rule for BloomFilterRule {
             if is_uuid || high_cardinality {
                 let path = col0.column_path().clone();
                 let ndv = card.distinct_count;
+                let mut prescription = Prescription::new();
+                prescription.push(Directive::SetColumnBloomFilter(path.clone(), true));
+                prescription.push(Directive::SetColumnBloomFilterNdv(path.clone(), ndv));
                 diagnostics.push(Diagnostic {
                     rule_name: self.name(),
                     severity: Severity::Suggestion,
@@ -77,10 +81,7 @@ impl Rule for BloomFilterRule {
                              (~{ndv} estimated distinct values)"
                         )
                     },
-                    fixes: vec![
-                        FixAction::SetColumnBloomFilterEnabled(path.clone(), true),
-                        FixAction::SetColumnBloomFilterNdv(path, ndv),
-                    ],
+                    prescription,
                 });
             }
         }

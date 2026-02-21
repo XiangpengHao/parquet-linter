@@ -11,55 +11,17 @@ use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStream
 use parquet::basic::{Compression, Encoding};
 use parquet::file::metadata::{ParquetMetaData, SortingColumn};
 use parquet::file::properties::{
-    EnabledStatistics, WriterProperties, WriterPropertiesBuilder, WriterVersion,
+    EnabledStatistics, WriterProperties, WriterVersion,
 };
 
-use crate::diagnostic::FixAction;
-
-pub fn build_writer_properties(actions: &[FixAction]) -> WriterProperties {
-    apply_fix_actions(WriterProperties::builder(), actions).build()
-}
+use crate::prescription::Prescription;
 
 fn build_writer_properties_with_base(
     metadata: &ParquetMetaData,
-    actions: &[FixAction],
+    prescription: &Prescription,
 ) -> WriterProperties {
     let base = infer_writer_properties(metadata);
-    apply_fix_actions(base.into_builder(), actions).build()
-}
-
-fn apply_fix_actions(
-    mut builder: WriterPropertiesBuilder,
-    actions: &[FixAction],
-) -> WriterPropertiesBuilder {
-    for action in actions {
-        builder = match action {
-            FixAction::SetDataPageSizeLimit(v) => builder.set_data_page_size_limit(*v),
-            FixAction::SetMaxRowGroupSize(v) => builder.set_max_row_group_size(*v),
-            FixAction::SetColumnCompression(col, c) => {
-                builder.set_column_compression(col.clone(), *c)
-            }
-            FixAction::SetColumnEncoding(col, e) => builder.set_column_encoding(col.clone(), *e),
-            FixAction::SetColumnDictionaryEnabled(col, v) => {
-                builder.set_column_dictionary_enabled(col.clone(), *v)
-            }
-            FixAction::SetColumnDictionaryPageSizeLimit(col, v) => {
-                builder.set_column_dictionary_page_size_limit(col.clone(), *v)
-            }
-            FixAction::SetColumnStatisticsEnabled(col, v) => {
-                builder.set_column_statistics_enabled(col.clone(), *v)
-            }
-            FixAction::SetColumnBloomFilterEnabled(col, v) => {
-                builder.set_column_bloom_filter_enabled(col.clone(), *v)
-            }
-            FixAction::SetColumnBloomFilterNdv(col, v) => {
-                builder.set_column_bloom_filter_ndv(col.clone(), *v)
-            }
-            FixAction::SetStatisticsTruncateLength(v) => builder.set_statistics_truncate_length(*v),
-            FixAction::SetCompression(c) => builder.set_compression(*c),
-        };
-    }
-    builder
+    prescription.apply(base.into_builder()).build()
 }
 
 fn infer_writer_properties(metadata: &ParquetMetaData) -> WriterProperties {
@@ -254,11 +216,11 @@ pub async fn rewrite(
     store: Arc<dyn ObjectStore>,
     path: ObjectPath,
     output: &Path,
-    actions: &[FixAction],
+    prescription: &Prescription,
 ) -> Result<()> {
     let reader = ParquetObjectReader::new(store, path);
     let builder = ParquetRecordBatchStreamBuilder::new(reader).await?;
-    let props = build_writer_properties_with_base(builder.metadata(), actions);
+    let props = build_writer_properties_with_base(builder.metadata(), prescription);
     let schema = builder.schema().clone();
     let mut stream = builder.build()?;
 
@@ -281,6 +243,8 @@ mod tests {
     use parquet::basic::{GzipLevel, ZstdLevel};
     use parquet::schema::types::ColumnPath;
     use std::sync::Arc;
+
+    use crate::prescription::{Codec, Directive, Prescription};
 
     fn write_two_column_file(path: &Path, props: WriterProperties) -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
@@ -326,12 +290,13 @@ mod tests {
 
         write_two_column_file(&input, input_props)?;
 
-        let fixes = vec![FixAction::SetColumnCompression(
+        let mut prescription = Prescription::new();
+        prescription.push(Directive::SetColumnCompression(
             ColumnPath::from("a"),
-            Compression::GZIP(GzipLevel::default()),
-        )];
+            Codec::Gzip(6),
+        ));
         let (store, path) = crate::loader::parse(input.to_str().unwrap())?;
-        rewrite(store, path, &output, &fixes).await?;
+        rewrite(store, path, &output, &prescription).await?;
 
         assert_eq!(
             read_column_compression(&output, 0)?,

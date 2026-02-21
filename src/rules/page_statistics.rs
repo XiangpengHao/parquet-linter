@@ -1,6 +1,6 @@
-use crate::diagnostic::{Diagnostic, FixAction, Location, Severity};
+use crate::diagnostic::{Diagnostic, Location, Severity};
+use crate::prescription::{Directive, Prescription, StatisticsConfig};
 use crate::rule::{Rule, RuleContext};
-use parquet::file::properties::EnabledStatistics;
 
 pub struct PageStatisticsRule;
 
@@ -25,6 +25,11 @@ impl Rule for PageStatisticsRule {
                 .count();
             if missing_groups > 0 {
                 let path = row_groups[0].column(col_idx).column_path().clone();
+                let mut prescription = Prescription::new();
+                prescription.push(Directive::SetColumnStatistics(
+                    path.clone(),
+                    StatisticsConfig::Page,
+                ));
                 diagnostics.push(Diagnostic {
                     rule_name: self.name(),
                     severity: Severity::Warning,
@@ -37,10 +42,7 @@ impl Rule for PageStatisticsRule {
                          page statistics are missing",
                         row_groups.len()
                     ),
-                    fixes: vec![FixAction::SetColumnStatisticsEnabled(
-                        path,
-                        EnabledStatistics::Page,
-                    )],
+                    prescription,
                 });
             }
         }

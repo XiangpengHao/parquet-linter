@@ -1,4 +1,5 @@
-use crate::diagnostic::{Diagnostic, FixAction, Location, Severity};
+use crate::diagnostic::{Diagnostic, Location, Severity};
+use crate::prescription::{Directive, Prescription};
 use crate::rule::{Rule, RuleContext};
 use parquet::basic::Type as PhysicalType;
 
@@ -51,6 +52,8 @@ impl Rule for VectorEmbeddingRule {
             let avg_values = total_values / total_rows;
             if avg_values >= MIN_ELEMENTS_PER_ROW {
                 let path = col0.column_path().clone();
+                let mut prescription = Prescription::new();
+                prescription.push(Directive::SetFileDataPageSizeLimit(SMALL_PAGE_SIZE));
                 diagnostics.push(Diagnostic {
                     rule_name: self.name(),
                     severity: Severity::Warning,
@@ -62,7 +65,7 @@ impl Rule for VectorEmbeddingRule {
                         "column looks like a vector embedding ({avg_values} values/row on average), \
                          consider smaller page size for random-access lookups"
                     ),
-                    fixes: vec![FixAction::SetDataPageSizeLimit(SMALL_PAGE_SIZE)],
+                    prescription,
                 });
             }
         }
