@@ -7,12 +7,13 @@ pub struct BloomFilterRule;
 
 const HIGH_CARDINALITY_RATIO: f64 = 0.5;
 
+#[async_trait::async_trait]
 impl Rule for BloomFilterRule {
     fn name(&self) -> &'static str {
         "bloom-filter-recommendation"
     }
 
-    fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
+    async fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         let row_groups = ctx.metadata.row_groups();
         if row_groups.is_empty() {

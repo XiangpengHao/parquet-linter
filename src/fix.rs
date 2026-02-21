@@ -1,13 +1,18 @@
+use std::fs::File;
+use std::path::Path;
+use std::sync::Arc;
+
 use anyhow::Result;
+use futures::StreamExt;
+use object_store::path::Path as ObjectPath;
+use object_store::ObjectStore;
 use parquet::arrow::ArrowWriter;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use parquet::basic::{Compression, Encoding};
 use parquet::file::metadata::{ParquetMetaData, SortingColumn};
 use parquet::file::properties::{
     EnabledStatistics, WriterProperties, WriterPropertiesBuilder, WriterVersion,
 };
-use std::fs::File;
-use std::path::Path;
 
 use crate::diagnostic::FixAction;
 
@@ -245,17 +250,22 @@ fn most_frequent<T: Copy + Eq>(values: impl IntoIterator<Item = T>) -> Option<T>
         .map(|(value, _)| value)
 }
 
-pub fn rewrite_file(input: &Path, output: &Path, actions: &[FixAction]) -> Result<()> {
-    let input_file = File::open(input)?;
-    let builder = ParquetRecordBatchReaderBuilder::try_new(input_file)?;
+pub async fn rewrite(
+    store: Arc<dyn ObjectStore>,
+    path: ObjectPath,
+    output: &Path,
+    actions: &[FixAction],
+) -> Result<()> {
+    let reader = ParquetObjectReader::new(store, path);
+    let builder = ParquetRecordBatchStreamBuilder::new(reader).await?;
     let props = build_writer_properties_with_base(builder.metadata(), actions);
     let schema = builder.schema().clone();
-    let reader = builder.build()?;
+    let mut stream = builder.build()?;
 
     let output_file = File::create(output)?;
     let mut writer = ArrowWriter::try_new(output_file, schema, Some(props))?;
 
-    for batch in reader {
+    while let Some(batch) = stream.next().await {
         let batch = batch?;
         writer.write(&batch)?;
     }
@@ -293,6 +303,7 @@ mod tests {
     }
 
     fn read_column_compression(path: &Path, column_idx: usize) -> Result<Compression> {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
         let input = File::open(path)?;
         let builder = ParquetRecordBatchReaderBuilder::try_new(input)?;
         let metadata = builder.metadata();
@@ -300,8 +311,8 @@ mod tests {
         Ok(compression)
     }
 
-    #[test]
-    fn rewrite_preserves_untouched_column_compression() -> Result<()> {
+    #[tokio::test]
+    async fn rewrite_preserves_untouched_column_compression() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         let input = tempdir.path().join("input.parquet");
         let output = tempdir.path().join("output.parquet");
@@ -319,7 +330,8 @@ mod tests {
             ColumnPath::from("a"),
             Compression::GZIP(GzipLevel::default()),
         )];
-        rewrite_file(&input, &output, &fixes)?;
+        let (store, path) = crate::loader::parse(input.to_str().unwrap())?;
+        rewrite(store, path, &output, &fixes).await?;
 
         assert_eq!(
             read_column_compression(&output, 0)?,

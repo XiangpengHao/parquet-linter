@@ -77,12 +77,13 @@ fn build_policy_message(suggestion: RowGroupSuggestion, total_row_groups: usize)
     )
 }
 
+#[async_trait::async_trait]
 impl Rule for PageSizeRule {
     fn name(&self) -> &'static str {
         "page-row-group-size"
     }
 
-    fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
+    async fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
         let row_groups: Vec<_> = ctx
             .metadata
             .row_groups()

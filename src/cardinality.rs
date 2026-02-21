@@ -1,12 +1,13 @@
 use anyhow::Result;
 use arrow_array::*;
+use futures::StreamExt;
+use parquet::arrow::async_reader::ParquetObjectReader;
 use parquet::column::page::Page;
 use parquet::file::metadata::ParquetMetaData;
-use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::collections::HashSet;
-use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::path::Path;
+
+use crate::rule;
 
 pub struct ColumnCardinality {
     pub distinct_count: u64,
@@ -29,9 +30,8 @@ const SAMPLE_ROWS: usize = 16_384;
 /// 1. Distinct count from one row group's column statistics
 /// 2. Distinct count inferred from one row group's dictionary page
 /// 3. Sample values from one row group and estimate file-level ratio
-pub fn estimate(
-    path: &Path,
-    reader: &SerializedFileReader<File>,
+pub async fn estimate(
+    reader: &ParquetObjectReader,
     metadata: &ParquetMetaData,
 ) -> Result<Vec<ColumnCardinality>> {
     let num_cols = metadata.file_metadata().schema_descr().num_columns();
@@ -64,8 +64,9 @@ pub fn estimate(
             continue;
         }
 
-        // Tier 2: dictionary page
-        if let Some(dc) = dictionary_distinct_count(reader, sample_rg_idx, col_idx) {
+        // Tier 2: dictionary page (fetches only this column chunk's bytes)
+        if let Some(dc) = dictionary_distinct_count(reader, metadata, sample_rg_idx, col_idx).await
+        {
             result[col_idx] = Some(ColumnCardinality {
                 distinct_count: scale_distinct(dc.min(sample_total), sample_total, total).max(dc),
                 total_count: total,
@@ -79,7 +80,8 @@ pub fn estimate(
     if is_flat {
         let unresolved: Vec<usize> = (0..num_cols).filter(|&i| result[i].is_none()).collect();
         if !unresolved.is_empty() {
-            sample_cardinalities(path, &totals, sample_rg_idx, &unresolved, &mut result)?;
+            sample_cardinalities(reader, metadata, &totals, sample_rg_idx, &unresolved, &mut result)
+                .await?;
         }
     }
 
@@ -126,15 +128,17 @@ fn scale_distinct(sample_distinct: u64, sample_total: u64, full_total: u64) -> u
         .min(full_total)
 }
 
-/// Read one row group's dictionary page and return dictionary entry count.
-fn dictionary_distinct_count(
-    reader: &SerializedFileReader<File>,
+/// Read one row group's dictionary page via a targeted byte-range fetch.
+async fn dictionary_distinct_count(
+    reader: &ParquetObjectReader,
+    metadata: &ParquetMetaData,
     rg_idx: usize,
     col_idx: usize,
 ) -> Option<u64> {
-    let rg_reader = reader.get_row_group(rg_idx).ok()?;
-    let mut page_reader = rg_reader.get_column_page_reader(col_idx).ok()?;
-
+    let mut page_reader = rule::column_page_reader(reader, metadata, rg_idx, col_idx)
+        .await
+        .ok()?;
+    use parquet::column::page::PageReader;
     while let Ok(Some(page)) = page_reader.get_next_page() {
         match page {
             Page::DictionaryPage { num_values, .. } => return Some(num_values as u64),
@@ -144,30 +148,37 @@ fn dictionary_distinct_count(
     None
 }
 
-fn sample_cardinalities(
-    path: &Path,
+async fn sample_cardinalities(
+    reader: &ParquetObjectReader,
+    metadata: &ParquetMetaData,
     totals: &[u64],
     sample_rg_idx: usize,
     columns: &[usize],
     result: &mut [Option<ColumnCardinality>],
 ) -> Result<()> {
-    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 
-    let file = File::open(path)?;
-    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
-    let reader = builder
+    let builder = ParquetRecordBatchStreamBuilder::new(reader.clone())
+        .await?
         .with_row_groups(vec![sample_rg_idx])
         .with_batch_size(SAMPLE_ROWS)
-        .with_limit(SAMPLE_ROWS)
-        .build()?;
+        .with_limit(SAMPLE_ROWS);
+
+    // Project only the columns we need
+    let mask = parquet::arrow::ProjectionMask::leaves(
+        metadata.file_metadata().schema_descr(),
+        columns.iter().copied(),
+    );
+    let mut stream = builder.with_projection(mask).build()?;
 
     let mut sets: Vec<HashSet<u64>> = vec![HashSet::new(); columns.len()];
     let mut sample_rows = 0u64;
 
-    for batch_result in reader {
+    while let Some(batch_result) = stream.next().await {
         let batch = batch_result?;
-        for (i, &col_idx) in columns.iter().enumerate() {
-            hash_array_values(batch.column(col_idx).as_ref(), &mut sets[i]);
+        // Projected batch columns are in order of `columns`
+        for (i, _col_idx) in columns.iter().enumerate() {
+            hash_array_values(batch.column(i).as_ref(), &mut sets[i]);
         }
         sample_rows += batch.num_rows() as u64;
     }

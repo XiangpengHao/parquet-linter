@@ -17,7 +17,8 @@ struct Cli {
 enum Command {
     /// Check a parquet file for issues
     Check {
-        file: PathBuf,
+        /// File path or URL (local, s3://, https://)
+        file: String,
         /// Only run specific rules (comma-separated)
         #[arg(long, value_delimiter = ',')]
         rules: Option<Vec<String>>,
@@ -27,7 +28,8 @@ enum Command {
     },
     /// Fix issues by rewriting the parquet file
     Fix {
-        file: PathBuf,
+        /// File path or URL (local, s3://, https://)
+        file: String,
         /// Output file path
         #[arg(short, long)]
         output: PathBuf,
@@ -38,10 +40,10 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-
 }
 
-fn main() -> Result<()> {
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Check {
@@ -49,8 +51,9 @@ fn main() -> Result<()> {
             rules,
             severity,
         } => {
+            let (store, path) = parquet_linter::loader::parse(&file)?;
             let diagnostics =
-                parquet_linter::lint(&file, rules.as_deref())?;
+                parquet_linter::lint(store, path, rules.as_deref()).await?;
             let filtered: Vec<_> = diagnostics
                 .iter()
                 .filter(|d| d.severity >= severity)
@@ -77,8 +80,9 @@ fn main() -> Result<()> {
             rules,
             dry_run,
         } => {
+            let (store, path) = parquet_linter::loader::parse(&file)?;
             let diagnostics =
-                parquet_linter::lint(&file, rules.as_deref())?;
+                parquet_linter::lint(store.clone(), path.clone(), rules.as_deref()).await?;
             let all_fixes: Vec<_> = diagnostics.iter().flat_map(|d| d.fixes.clone()).collect();
 
             if all_fixes.is_empty() {
@@ -97,7 +101,7 @@ fn main() -> Result<()> {
                 let msg = format!("Dry run: {} fix action(s) would be applied.", all_fixes.len());
                 println!("{}", msg.cyan().bold());
             } else {
-                parquet_linter::fix::rewrite_file(&file, &output, &all_fixes)?;
+                parquet_linter::fix::rewrite(store, path, &output, &all_fixes).await?;
                 let msg = format!(
                     "Applied {} fix action(s), wrote {}",
                     all_fixes.len(),
@@ -106,7 +110,6 @@ fn main() -> Result<()> {
                 println!("{}", msg.green().bold());
             }
         }
-
     }
     Ok(())
 }

@@ -8,12 +8,18 @@ name = "parquet-lint"
 path = "src/main.rs"
 
 [dependencies]
-parquet = { version = "57.3.0", features = ["arrow"] }
+parquet = { version = "57.3.0", features = ["arrow", "async", "object_store"] }
 arrow-array = "57"
 arrow-schema = "57"
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
+async-trait = "0.1"
+bytes = "1"
 colored = "3"
+object_store = { version = "0.12.5", features = ["aws", "http"] }
+futures = "0.3"
+tokio = { version = "1", features = ["rt", "macros"] }
+url = "2"
 
 [dev-dependencies]
 tempfile = "3"

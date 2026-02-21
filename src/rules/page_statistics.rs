@@ -4,12 +4,13 @@ use parquet::file::properties::EnabledStatistics;
 
 pub struct PageStatisticsRule;
 
+#[async_trait::async_trait]
 impl Rule for PageStatisticsRule {
     fn name(&self) -> &'static str {
         "missing-page-statistics"
     }
 
-    fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
+    async fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         let row_groups = ctx.metadata.row_groups();
         if row_groups.is_empty() {

@@ -1,27 +1,44 @@
 pub mod cardinality;
 pub mod diagnostic;
 pub mod fix;
+pub mod loader;
 pub mod rule;
 pub mod rules;
 
-use diagnostic::{Diagnostic, Severity};
-use parquet::file::reader::FileReader;
-use parquet::file::serialized_reader::SerializedFileReader;
-use rule::RuleContext;
-use std::path::Path;
+use std::sync::Arc;
 
-pub fn lint(path: &Path, rule_names: Option<&[String]>) -> anyhow::Result<Vec<Diagnostic>> {
-    let file = std::fs::File::open(path)?;
-    let reader = SerializedFileReader::new(file)?;
-    let metadata = reader.metadata().clone();
-    let cardinalities = cardinality::estimate(path, &reader, &metadata)?;
+use diagnostic::{Diagnostic, Severity};
+use object_store::path::Path as ObjectPath;
+use object_store::ObjectStore;
+use parquet::arrow::async_reader::ParquetObjectReader;
+use rule::RuleContext;
+
+pub async fn lint(
+    store: Arc<dyn ObjectStore>,
+    path: ObjectPath,
+    rule_names: Option<&[String]>,
+) -> anyhow::Result<Vec<Diagnostic>> {
+    let reader = ParquetObjectReader::new(store, path);
+    lint_reader(reader, rule_names).await
+}
+
+async fn lint_reader(
+    reader: ParquetObjectReader,
+    rule_names: Option<&[String]>,
+) -> anyhow::Result<Vec<Diagnostic>> {
+    use parquet::arrow::async_reader::AsyncFileReader;
+    let metadata = reader.clone().get_metadata(None).await?;
+    let cardinalities = cardinality::estimate(&reader, &metadata).await?;
     let ctx = RuleContext {
-        metadata: &metadata,
-        cardinalities: &cardinalities,
-        reader: &reader,
+        metadata,
+        cardinalities,
+        reader,
     };
     let rules = rules::get_rules(rule_names);
-    let mut diagnostics: Vec<Diagnostic> = rules.iter().flat_map(|r| r.check(&ctx)).collect();
+    let mut diagnostics: Vec<Diagnostic> = Vec::new();
+    for r in &rules {
+        diagnostics.extend(r.check(&ctx).await);
+    }
     diagnostics.sort_by_key(|d| d.severity);
     Ok(diagnostics)
 }

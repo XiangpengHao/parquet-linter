@@ -49,12 +49,13 @@ fn classify_codec_issue(
     }
 }
 
+#[async_trait::async_trait]
 impl Rule for CompressionCodecRule {
     fn name(&self) -> &'static str {
         "compression-codec-upgrade"
     }
 
-    fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
+    async fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         let row_groups = ctx.metadata.row_groups();
         if row_groups.is_empty() {

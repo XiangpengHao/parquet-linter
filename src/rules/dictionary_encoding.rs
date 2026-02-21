@@ -1,10 +1,9 @@
 use crate::diagnostic::{Diagnostic, FixAction, Location, Severity};
-use crate::rule::{Rule, RuleContext};
+use crate::rule::{self, Rule, RuleContext};
 use parquet::basic::Encoding;
 use parquet::basic::PageType;
-use parquet::column::page::Page;
+use parquet::column::page::PageReader;
 use parquet::file::metadata::{ColumnChunkMetaData, PageEncodingStats};
-use parquet::file::reader::FileReader;
 
 pub struct DictionaryEncodingRule;
 
@@ -168,34 +167,37 @@ fn choose_sample_row_groups(indices: &[usize]) -> Vec<usize> {
         .collect()
 }
 
-fn classify_from_sampled_pages(
+async fn classify_from_sampled_pages(
     ctx: &RuleContext,
     row_group_idx: usize,
     col_idx: usize,
 ) -> ChunkDictionaryState {
-    let Some(summary) = summarize_data_page_encodings(ctx, row_group_idx, col_idx) else {
+    let Some(summary) = summarize_data_page_encodings(ctx, row_group_idx, col_idx).await else {
         return ChunkDictionaryState::Unknown;
     };
     summary.classify()
 }
 
-fn summarize_data_page_encodings(
+async fn summarize_data_page_encodings(
     ctx: &RuleContext,
     row_group_idx: usize,
     col_idx: usize,
 ) -> Option<DataPageEncodingSummary> {
-    let rg_reader = ctx.reader.get_row_group(row_group_idx).ok()?;
-    let mut page_reader = rg_reader.get_column_page_reader(col_idx).ok()?;
+    let mut page_reader =
+        rule::column_page_reader(&ctx.reader, &ctx.metadata, row_group_idx, col_idx)
+            .await
+            .ok()?;
     let mut summary = DataPageEncodingSummary::default();
     let mut seen_data_page = false;
 
     while let Ok(Some(page)) = page_reader.get_next_page() {
         let encoding = match page {
-            Page::DataPage { encoding, .. } | Page::DataPageV2 { encoding, .. } => {
+            parquet::column::page::Page::DataPage { encoding, .. }
+            | parquet::column::page::Page::DataPageV2 { encoding, .. } => {
                 seen_data_page = true;
                 encoding
             }
-            Page::DictionaryPage { .. } => continue,
+            parquet::column::page::Page::DictionaryPage { .. } => continue,
         };
 
         match encoding {
@@ -214,12 +216,13 @@ fn summarize_data_page_encodings(
     seen_data_page.then_some(summary)
 }
 
+#[async_trait::async_trait]
 impl Rule for DictionaryEncodingRule {
     fn name(&self) -> &'static str {
         "dictionary-encoding-cardinality"
     }
 
-    fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
+    async fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         let row_groups = ctx.metadata.row_groups();
         if row_groups.is_empty() {
@@ -257,7 +260,7 @@ impl Rule for DictionaryEncodingRule {
             let mut sampled_fallback_groups = 0usize;
             let mut sampled_no_dict_groups = 0usize;
             for rg_idx in sampled_ambiguous_groups.iter().copied() {
-                match classify_from_sampled_pages(ctx, rg_idx, col_idx) {
+                match classify_from_sampled_pages(ctx, rg_idx, col_idx).await {
                     ChunkDictionaryState::Fallback => sampled_fallback_groups += 1,
                     ChunkDictionaryState::NoDictionary => sampled_no_dict_groups += 1,
                     ChunkDictionaryState::DictionaryOnly | ChunkDictionaryState::Unknown => {}

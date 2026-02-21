@@ -6,12 +6,13 @@ pub struct StringStatisticsRule;
 
 const MAX_STAT_LENGTH: usize = 64;
 
+#[async_trait::async_trait]
 impl Rule for StringStatisticsRule {
     fn name(&self) -> &'static str {
         "oversized-string-statistics"
     }
 
-    fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
+    async fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         let row_groups = ctx.metadata.row_groups();
         if row_groups.is_empty() {

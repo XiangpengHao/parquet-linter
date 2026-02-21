@@ -7,12 +7,13 @@ pub struct VectorEmbeddingRule;
 const SMALL_PAGE_SIZE: usize = 8192;
 const MIN_ELEMENTS_PER_ROW: i64 = 64;
 
+#[async_trait::async_trait]
 impl Rule for VectorEmbeddingRule {
     fn name(&self) -> &'static str {
         "vector-embedding-page-size"
     }
 
-    fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
+    async fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         let row_groups = ctx.metadata.row_groups();
         if row_groups.is_empty() {
