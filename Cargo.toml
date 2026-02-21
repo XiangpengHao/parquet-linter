@@ -3,5 +3,13 @@ name = "parquet-linter"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "parquet-lint"
+path = "src/main.rs"
+
 [dependencies]
-parquet = "57.3.0"
+parquet = { version = "57.3.0", features = ["arrow"] }
+arrow-array = "57"
+arrow-schema = "57"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
