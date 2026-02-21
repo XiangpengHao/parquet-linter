@@ -14,6 +14,10 @@ impl Rule for PageSizeRule {
 
     fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
+        if ctx.metadata.row_groups().len() <= 1 {
+            return diagnostics;
+        }
+
         for (rg_idx, rg) in ctx.metadata.row_groups().iter().enumerate() {
             let size = rg.compressed_size();
             if size < MIN_ROW_GROUP_SIZE {

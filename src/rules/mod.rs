@@ -5,7 +5,6 @@ mod dictionary_encoding;
 mod float_encoding;
 mod page_size;
 mod page_statistics;
-mod sorted_integers;
 mod string_statistics;
 mod timestamp_encoding;
 mod vector_embedding;
@@ -20,7 +19,6 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(dictionary_encoding::DictionaryEncodingRule),
         Box::new(page_size::PageSizeRule),
         Box::new(float_encoding::FloatEncodingRule),
-        Box::new(sorted_integers::SortedIntegersRule),
         Box::new(bloom_filter::BloomFilterRule),
         Box::new(compression_codec::CompressionCodecRule),
         Box::new(timestamp_encoding::TimestampEncodingRule),
