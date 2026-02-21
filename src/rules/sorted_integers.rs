@@ -52,11 +52,10 @@ impl Rule for SortedIntegersRule {
                             .and_then(|s| s.min_bytes_opt())
                     })
                     .collect();
-                mins.windows(2)
-                    .all(|w| match (w[0], w[1]) {
-                        (Some(a), Some(b)) => a <= b,
-                        _ => false,
-                    })
+                mins.windows(2).all(|w| match (w[0], w[1]) {
+                    (Some(a), Some(b)) => a <= b,
+                    _ => false,
+                })
             } else {
                 false
             };
@@ -67,7 +66,6 @@ impl Rule for SortedIntegersRule {
                     rule_name: self.name(),
                     severity: Severity::Info,
                     location: Location::Column {
-                        row_group: 0,
                         column: col_idx,
                         path: path.clone(),
                     },

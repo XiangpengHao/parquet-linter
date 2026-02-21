@@ -18,6 +18,7 @@ pub fn lint(path: &Path, rule_names: Option<&[String]>) -> anyhow::Result<Vec<Di
     let ctx = RuleContext {
         metadata: &metadata,
         cardinalities: &cardinalities,
+        reader: &reader,
     };
     let rules = rules::get_rules(rule_names);
     let mut diagnostics: Vec<Diagnostic> = rules.iter().flat_map(|r| r.check(&ctx)).collect();

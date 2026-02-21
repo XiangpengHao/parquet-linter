@@ -37,7 +37,7 @@ impl std::str::FromStr for Severity {
 pub enum Location {
     File,
     RowGroup { index: usize },
-    Column { row_group: usize, column: usize, path: ColumnPath },
+    Column { column: usize, path: ColumnPath },
 }
 
 impl fmt::Display for Location {
@@ -45,8 +45,8 @@ impl fmt::Display for Location {
         match self {
             Location::File => write!(f, "file"),
             Location::RowGroup { index } => write!(f, "row_group[{index}]"),
-            Location::Column { row_group, column, path } => {
-                write!(f, "row_group[{row_group}].column[{column}]({path})")
+            Location::Column { column, path } => {
+                write!(f, "column[{column}]({path})")
             }
         }
     }
@@ -71,7 +71,9 @@ impl fmt::Display for FixAction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             FixAction::SetDataPageSizeLimit(v) => write!(f, "set data_page_size_limit={v}"),
-            FixAction::SetMaxRowGroupSize(v) => write!(f, "set max_row_group_size={v}"),
+            FixAction::SetMaxRowGroupSize(v) => {
+                write!(f, "set max_row_group_size={v} (increase rows per row group)")
+            }
             FixAction::SetColumnCompression(col, c) => write!(f, "set {col} compression={c:?}"),
             FixAction::SetColumnEncoding(col, e) => write!(f, "set {col} encoding={e:?}"),
             FixAction::SetColumnDictionaryEnabled(col, v) => {
@@ -125,7 +127,11 @@ impl Diagnostic {
 
 impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}] {} @ {}: {}", self.severity, self.rule_name, self.location, self.message)?;
+        write!(
+            f,
+            "[{}] {} @ {}: {}",
+            self.severity, self.rule_name, self.location, self.message
+        )?;
         for fix in &self.fixes {
             write!(f, "\n  fix: {fix}")?;
         }

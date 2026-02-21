@@ -14,52 +14,73 @@ impl Rule for BloomFilterRule {
 
     fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
-        for (rg_idx, rg) in ctx.metadata.row_groups().iter().enumerate() {
-            for (col_idx, col) in rg.columns().iter().enumerate() {
-                if col.bloom_filter_offset().is_some() {
-                    continue;
-                }
+        let row_groups = ctx.metadata.row_groups();
+        if row_groups.is_empty() {
+            return diagnostics;
+        }
 
-                let descr = col.column_descr();
-                let is_byte_array = matches!(
-                    descr.physical_type(),
-                    PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY
-                );
-                if !is_byte_array {
-                    continue;
-                }
+        let num_columns = row_groups[0].num_columns();
+        for col_idx in 0..num_columns {
+            let col0 = row_groups[0].column(col_idx);
+            let descr = col0.column_descr();
+            let is_byte_array = matches!(
+                descr.physical_type(),
+                PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY
+            );
+            if !is_byte_array {
+                continue;
+            }
 
-                let is_uuid = matches!(descr.logical_type_ref(), Some(&LogicalType::Uuid));
-                let card = &ctx.cardinalities[col_idx];
-                let high_cardinality = card.ratio() > HIGH_CARDINALITY_RATIO;
+            let non_empty_groups = row_groups
+                .iter()
+                .filter(|rg| rg.column(col_idx).num_values() > 0)
+                .count();
+            if non_empty_groups == 0 {
+                continue;
+            }
 
-                if is_uuid || high_cardinality {
-                    let path = col.column_path().clone();
-                    let ndv = card.distinct_count;
-                    diagnostics.push(Diagnostic {
-                        rule_name: self.name(),
-                        severity: Severity::Info,
-                        location: Location::Column {
-                            row_group: rg_idx,
-                            column: col_idx,
-                            path: path.clone(),
-                        },
-                        message: if is_uuid {
-                            "UUID column without bloom filter; \
+            let missing_bloom_groups = row_groups
+                .iter()
+                .filter(|rg| {
+                    let col = rg.column(col_idx);
+                    col.num_values() > 0 && col.bloom_filter_offset().is_none()
+                })
+                .count();
+            if missing_bloom_groups == 0 {
+                continue;
+            }
+
+            let is_uuid = matches!(descr.logical_type_ref(), Some(&LogicalType::Uuid));
+            let card = &ctx.cardinalities[col_idx];
+            let high_cardinality = card.ratio() > HIGH_CARDINALITY_RATIO;
+
+            if is_uuid || high_cardinality {
+                let path = col0.column_path().clone();
+                let ndv = card.distinct_count;
+                diagnostics.push(Diagnostic {
+                    rule_name: self.name(),
+                    severity: Severity::Info,
+                    location: Location::Column {
+                        column: col_idx,
+                        path: path.clone(),
+                    },
+                    message: if is_uuid {
+                        format!(
+                            "UUID column missing bloom filters in {missing_bloom_groups}/{non_empty_groups} row groups; \
                              bloom filters enable fast point lookups"
-                                .to_string()
-                        } else {
-                            format!(
-                                "high-cardinality byte array column without bloom filter \
-                                 (~{ndv} estimated distinct values)"
-                            )
-                        },
-                        fixes: vec![
-                            FixAction::SetColumnBloomFilterEnabled(path.clone(), true),
-                            FixAction::SetColumnBloomFilterNdv(path, ndv),
-                        ],
-                    });
-                }
+                        )
+                    } else {
+                        format!(
+                            "high-cardinality byte array column missing bloom filters in \
+                             {missing_bloom_groups}/{non_empty_groups} row groups \
+                             (~{ndv} estimated distinct values)"
+                        )
+                    },
+                    fixes: vec![
+                        FixAction::SetColumnBloomFilterEnabled(path.clone(), true),
+                        FixAction::SetColumnBloomFilterNdv(path, ndv),
+                    ],
+                });
             }
         }
         diagnostics

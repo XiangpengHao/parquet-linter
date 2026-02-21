@@ -5,9 +5,6 @@ A linter for Parquet files. Analyzes metadata to detect suboptimal encoding, com
 ## Usage
 
 ```bash
-# Show file metadata
-parquet-lint info data.parquet
-
 # Check for issues
 parquet-lint check data.parquet
 

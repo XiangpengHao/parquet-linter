@@ -25,53 +25,61 @@ impl ColumnCardinality {
 
 const SAMPLE_ROWS: usize = 16_384;
 
-/// Estimate per-column cardinality using a 3-tier approach:
-/// 1. Parquet statistics `distinct_count` (exact when available)
-/// 2. Dictionary page entry count (exact for that row group, lower bound for file)
-/// 3. Sample first 16k rows and count distinct values
+/// Estimate per-column cardinality using a lightweight 3-tier approach:
+/// 1. Distinct count from one row group's column statistics
+/// 2. Distinct count inferred from one row group's dictionary page
+/// 3. Sample values from one row group and estimate file-level ratio
 pub fn estimate(
     path: &Path,
     reader: &SerializedFileReader<File>,
     metadata: &ParquetMetaData,
 ) -> Result<Vec<ColumnCardinality>> {
     let num_cols = metadata.file_metadata().schema_descr().num_columns();
+    if metadata.num_row_groups() == 0 {
+        return Ok(Vec::new());
+    }
+
+    let sample_rg_idx = pick_sample_row_group(metadata);
+    let totals = total_values_per_column(metadata, num_cols);
     let mut result: Vec<Option<ColumnCardinality>> = (0..num_cols).map(|_| None).collect();
 
     for col_idx in 0..num_cols {
-        let total = total_values(metadata, col_idx);
+        let total = totals[col_idx];
+        let sample_col = metadata.row_group(sample_rg_idx).column(col_idx);
+        let sample_total = sample_col.num_values() as u64;
+        if sample_total == 0 {
+            continue;
+        }
 
         // Tier 1: statistics
-        let dc = metadata
-            .row_groups()
-            .iter()
-            .filter_map(|rg| rg.column(col_idx).statistics()?.distinct_count_opt())
-            .max();
-        if let Some(dc) = dc {
+        if let Some(dc) = sample_col
+            .statistics()
+            .and_then(|s| s.distinct_count_opt())
+            .map(|dc| dc.min(sample_total))
+        {
             result[col_idx] = Some(ColumnCardinality {
-                distinct_count: dc,
+                distinct_count: scale_distinct(dc, sample_total, total),
                 total_count: total,
             });
             continue;
         }
 
-        // Tier 2: dictionary page entry count
-        if let Some(dc) = dictionary_distinct_count(reader, metadata, col_idx) {
+        // Tier 2: dictionary page
+        if let Some(dc) = dictionary_distinct_count(reader, sample_rg_idx, col_idx) {
             result[col_idx] = Some(ColumnCardinality {
-                distinct_count: dc,
+                distinct_count: scale_distinct(dc.min(sample_total), sample_total, total).max(dc),
                 total_count: total,
             });
         }
     }
 
-    // Tier 3: sample flat columns that still need estimation
+    // Tier 3: sample unresolved flat columns only.
     let schema = metadata.file_metadata().schema_descr();
     let is_flat = schema.root_schema().get_fields().len() == num_cols;
     if is_flat {
-        let needs_sampling: Vec<usize> = (0..num_cols)
-            .filter(|&i| result[i].is_none())
-            .collect();
-        if !needs_sampling.is_empty() {
-            sample_cardinalities(path, metadata, &needs_sampling, &mut result)?;
+        let unresolved: Vec<usize> = (0..num_cols).filter(|&i| result[i].is_none()).collect();
+        if !unresolved.is_empty() {
+            sample_cardinalities(path, &totals, sample_rg_idx, &unresolved, &mut result)?;
         }
     }
 
@@ -80,7 +88,7 @@ pub fn estimate(
         .into_iter()
         .enumerate()
         .map(|(col_idx, card)| {
-            let total = total_values(metadata, col_idx);
+            let total = totals[col_idx];
             card.unwrap_or(ColumnCardinality {
                 distinct_count: total,
                 total_count: total,
@@ -89,30 +97,48 @@ pub fn estimate(
         .collect())
 }
 
-fn total_values(metadata: &ParquetMetaData, col_idx: usize) -> u64 {
+fn pick_sample_row_group(metadata: &ParquetMetaData) -> usize {
     metadata
         .row_groups()
         .iter()
-        .map(|rg| rg.column(col_idx).num_values() as u64)
-        .sum()
+        .position(|rg| rg.num_rows() > 0)
+        .unwrap_or(0)
 }
 
-/// Read dictionary page from the first row group that has one.
-/// Returns the number of dictionary entries (= distinct values in that row group).
+fn total_values_per_column(metadata: &ParquetMetaData, num_cols: usize) -> Vec<u64> {
+    let mut totals = vec![0u64; num_cols];
+    for rg in metadata.row_groups() {
+        for (col_idx, total) in totals.iter_mut().enumerate() {
+            *total += rg.column(col_idx).num_values() as u64;
+        }
+    }
+    totals
+}
+
+fn scale_distinct(sample_distinct: u64, sample_total: u64, full_total: u64) -> u64 {
+    if sample_total == 0 || full_total == 0 {
+        return full_total;
+    }
+
+    let ratio = sample_distinct as f64 / sample_total as f64;
+    ((ratio * full_total as f64) as u64)
+        .max(sample_distinct)
+        .min(full_total)
+}
+
+/// Read one row group's dictionary page and return dictionary entry count.
 fn dictionary_distinct_count(
     reader: &SerializedFileReader<File>,
-    metadata: &ParquetMetaData,
+    rg_idx: usize,
     col_idx: usize,
 ) -> Option<u64> {
-    for rg_idx in 0..metadata.num_row_groups() {
-        let col = metadata.row_group(rg_idx).column(col_idx);
-        if col.dictionary_page_offset().is_none() {
-            continue;
-        }
-        let rg_reader = reader.get_row_group(rg_idx).ok()?;
-        let mut page_reader = rg_reader.get_column_page_reader(col_idx).ok()?;
-        if let Some(Page::DictionaryPage { num_values, .. }) = page_reader.get_next_page().ok()? {
-            return Some(num_values as u64);
+    let rg_reader = reader.get_row_group(rg_idx).ok()?;
+    let mut page_reader = rg_reader.get_column_page_reader(col_idx).ok()?;
+
+    while let Ok(Some(page)) = page_reader.get_next_page() {
+        match page {
+            Page::DictionaryPage { num_values, .. } => return Some(num_values as u64),
+            Page::DataPage { .. } | Page::DataPageV2 { .. } => break,
         }
     }
     None
@@ -120,7 +146,8 @@ fn dictionary_distinct_count(
 
 fn sample_cardinalities(
     path: &Path,
-    metadata: &ParquetMetaData,
+    totals: &[u64],
+    sample_rg_idx: usize,
     columns: &[usize],
     result: &mut [Option<ColumnCardinality>],
 ) -> Result<()> {
@@ -129,6 +156,7 @@ fn sample_cardinalities(
     let file = File::open(path)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let reader = builder
+        .with_row_groups(vec![sample_rg_idx])
         .with_batch_size(SAMPLE_ROWS)
         .with_limit(SAMPLE_ROWS)
         .build()?;
@@ -150,15 +178,18 @@ fn sample_cardinalities(
 
     for (i, &col_idx) in columns.iter().enumerate() {
         let sample_distinct = sets[i].len() as u64;
-        let total = total_values(metadata, col_idx);
-        // Use sample ratio directly (no extrapolation) — robust for classification
-        let ratio = sample_distinct as f64 / sample_rows as f64;
-        let estimated = (ratio * total as f64).min(total as f64) as u64;
+        let total = totals[col_idx];
+        let estimated = scale_distinct(sample_distinct, sample_rows, total);
 
-        result[col_idx] = Some(ColumnCardinality {
-            distinct_count: estimated.max(sample_distinct),
-            total_count: total,
-        });
+        let sampled = estimated.max(sample_distinct).min(total);
+        if let Some(existing) = result[col_idx].as_mut() {
+            existing.distinct_count = existing.distinct_count.max(sampled).min(total);
+        } else {
+            result[col_idx] = Some(ColumnCardinality {
+                distinct_count: sampled,
+                total_count: total,
+            });
+        }
     }
 
     Ok(())

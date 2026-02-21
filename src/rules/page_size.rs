@@ -4,7 +4,7 @@ use crate::rule::{Rule, RuleContext};
 pub struct PageSizeRule;
 
 const TARGET_ROW_GROUP_SIZE: i64 = 128 * 1024 * 1024; // 128 MB
-const MIN_ROW_GROUP_SIZE: i64 = 32 * 1024 * 1024; // 32 MB
+const MIN_ROW_GROUP_SIZE: i64 = 16 * 1024 * 1024; // 16 MB
 const MAX_ROW_GROUP_SIZE: i64 = 512 * 1024 * 1024; // 512 MB
 
 impl Rule for PageSizeRule {
@@ -25,7 +25,7 @@ impl Rule for PageSizeRule {
                     severity: Severity::Warning,
                     location: Location::RowGroup { index: rg_idx },
                     message: format!(
-                        "row group compressed size is {:.1} MB (< 32 MB), consider larger row groups",
+                        "row group compressed size is {:.1} MB (< 16 MB), consider larger row groups by increasing rows per row group",
                         size as f64 / 1024.0 / 1024.0
                     ),
                     fixes: vec![FixAction::SetMaxRowGroupSize(target_rows)],

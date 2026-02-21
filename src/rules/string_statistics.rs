@@ -13,20 +13,30 @@ impl Rule for StringStatisticsRule {
 
     fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
-        for (rg_idx, rg) in ctx.metadata.row_groups().iter().enumerate() {
-            for (col_idx, col) in rg.columns().iter().enumerate() {
-                if !matches!(
-                    col.column_descr().physical_type(),
-                    PhysicalType::BYTE_ARRAY
-                ) {
+        let row_groups = ctx.metadata.row_groups();
+        if row_groups.is_empty() {
+            return diagnostics;
+        }
+
+        let num_columns = row_groups[0].num_columns();
+        for col_idx in 0..num_columns {
+            let col0 = row_groups[0].column(col_idx);
+            if !matches!(
+                col0.column_descr().physical_type(),
+                PhysicalType::BYTE_ARRAY
+            ) {
+                continue;
+            }
+
+            let mut affected_groups = 0usize;
+            let mut peak_min_len = 0usize;
+            let mut peak_max_len = 0usize;
+
+            for rg in row_groups {
+                let col = rg.column(col_idx);
+                let Some(stats) = col.statistics() else {
                     continue;
-                }
-
-                let stats = match col.statistics() {
-                    Some(s) => s,
-                    None => continue,
                 };
-
                 if !stats.min_is_exact() {
                     continue;
                 }
@@ -34,26 +44,30 @@ impl Rule for StringStatisticsRule {
                 let min_len = stats.min_bytes_opt().map_or(0, |b| b.len());
                 let max_len = stats.max_bytes_opt().map_or(0, |b| b.len());
                 let oversized = min_len > MAX_STAT_LENGTH || max_len > MAX_STAT_LENGTH;
-
                 if oversized {
-                    let path = col.column_path().clone();
-                    diagnostics.push(Diagnostic {
-                        rule_name: self.name(),
-                        severity: Severity::Warning,
-                        location: Location::Column {
-                            row_group: rg_idx,
-                            column: col_idx,
-                            path: path.clone(),
-                        },
-                        message: format!(
-                            "string statistics are large (min: {min_len}B, max: {max_len}B) \
-                             and untruncated; consider truncating to {MAX_STAT_LENGTH} bytes"
-                        ),
-                        fixes: vec![FixAction::SetStatisticsTruncateLength(Some(
-                            MAX_STAT_LENGTH,
-                        ))],
-                    });
+                    affected_groups += 1;
+                    peak_min_len = peak_min_len.max(min_len);
+                    peak_max_len = peak_max_len.max(max_len);
                 }
+            }
+
+            if affected_groups > 0 {
+                let path = col0.column_path().clone();
+                diagnostics.push(Diagnostic {
+                    rule_name: self.name(),
+                    severity: Severity::Warning,
+                    location: Location::Column {
+                        column: col_idx,
+                        path: path.clone(),
+                    },
+                    message: format!(
+                        "string statistics are large (up to min: {peak_min_len}B, max: {peak_max_len}B) \
+                         in {affected_groups}/{} row groups and untruncated; \
+                         consider truncating to {MAX_STAT_LENGTH} bytes",
+                        row_groups.len()
+                    ),
+                    fixes: vec![FixAction::SetStatisticsTruncateLength(Some(MAX_STAT_LENGTH))],
+                });
             }
         }
         diagnostics
