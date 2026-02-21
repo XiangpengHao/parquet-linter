@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use colored::Colorize;
 use std::path::PathBuf;
 use std::process;
 
@@ -37,8 +38,7 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Print parquet file metadata
-    Info { file: PathBuf },
+
 }
 
 fn main() -> Result<()> {
@@ -57,13 +57,14 @@ fn main() -> Result<()> {
                 .collect();
 
             if filtered.is_empty() {
-                println!("No issues found.");
+                println!("{}", "No issues found. ✓".green().bold());
             } else {
                 for d in &filtered {
-                    println!("{d}");
+                    d.print_colored();
                     println!();
                 }
-                println!("{} issue(s) found.", filtered.len());
+                let summary = format!("{} issue(s) found.", filtered.len());
+                println!("{}", summary.yellow().bold());
             }
 
             if parquet_linter::has_warnings_or_errors(&diagnostics) {
@@ -81,31 +82,31 @@ fn main() -> Result<()> {
             let all_fixes: Vec<_> = diagnostics.iter().flat_map(|d| d.fixes.clone()).collect();
 
             if all_fixes.is_empty() {
-                println!("No fixes to apply.");
+                println!("{}", "No fixes to apply. ✓".green().bold());
                 return Ok(());
             }
 
             for d in &diagnostics {
                 if !d.fixes.is_empty() {
-                    println!("{d}");
+                    d.print_colored();
                     println!();
                 }
             }
 
             if dry_run {
-                println!("Dry run: {} fix action(s) would be applied.", all_fixes.len());
+                let msg = format!("Dry run: {} fix action(s) would be applied.", all_fixes.len());
+                println!("{}", msg.cyan().bold());
             } else {
                 parquet_linter::fix::rewrite_file(&file, &output, &all_fixes)?;
-                println!(
+                let msg = format!(
                     "Applied {} fix action(s), wrote {}",
                     all_fixes.len(),
                     output.display()
                 );
+                println!("{}", msg.green().bold());
             }
         }
-        Command::Info { file } => {
-            parquet_linter::metadata::print_info(&file)?;
-        }
+
     }
     Ok(())
 }

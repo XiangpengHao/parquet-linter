@@ -4,6 +4,9 @@ use parquet::basic::{Encoding, Type as PhysicalType};
 
 pub struct FloatEncodingRule;
 
+/// Below this ratio, dictionary encoding is better than BYTE_STREAM_SPLIT.
+const LOW_CARDINALITY_RATIO: f64 = 0.1;
+
 impl Rule for FloatEncodingRule {
     fn name(&self) -> &'static str {
         "float-byte-stream-split"
@@ -20,6 +23,11 @@ impl Rule for FloatEncodingRule {
                 ) && descr.max_rep_level() == 0;
 
                 if !is_scalar_float {
+                    continue;
+                }
+
+                // Low cardinality floats are better served by dictionary encoding
+                if ctx.cardinalities[col_idx].ratio() < LOW_CARDINALITY_RATIO {
                     continue;
                 }
 

@@ -1,3 +1,4 @@
+use colored::Colorize;
 use parquet::basic::{Compression, Encoding};
 use parquet::file::properties::EnabledStatistics;
 use parquet::schema::types::ColumnPath;
@@ -102,6 +103,24 @@ pub struct Diagnostic {
     pub location: Location,
     pub message: String,
     pub fixes: Vec<FixAction>,
+}
+
+impl Diagnostic {
+    pub fn print_colored(&self) {
+        let severity_str = match self.severity {
+            Severity::Info => "info".blue().bold(),
+            Severity::Warning => "warning".yellow().bold(),
+            Severity::Error => "error".red().bold(),
+        };
+        let rule = self.rule_name.dimmed();
+        let location = format!("{}", self.location).cyan();
+        println!("{severity_str} {rule}");
+        println!("  {} {location}", "-->".dimmed());
+        println!("  {}", self.message);
+        for fix in &self.fixes {
+            println!("  {} {fix}", "fix:".green().bold());
+        }
+    }
 }
 
 impl fmt::Display for Diagnostic {

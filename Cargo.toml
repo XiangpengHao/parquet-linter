@@ -13,3 +13,4 @@ arrow-array = "57"
 arrow-schema = "57"
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
+colored = "3"
