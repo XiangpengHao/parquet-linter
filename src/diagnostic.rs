@@ -71,9 +71,7 @@ impl fmt::Display for FixAction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             FixAction::SetDataPageSizeLimit(v) => write!(f, "set data_page_size_limit={v}"),
-            FixAction::SetMaxRowGroupSize(v) => {
-                write!(f, "set max_row_group_size={v} (increase rows per row group)")
-            }
+            FixAction::SetMaxRowGroupSize(v) => write!(f, "set max_row_group_size={v}"),
             FixAction::SetColumnCompression(col, c) => write!(f, "set {col} compression={c:?}"),
             FixAction::SetColumnEncoding(col, e) => write!(f, "set {col} encoding={e:?}"),
             FixAction::SetColumnDictionaryEnabled(col, v) => {
