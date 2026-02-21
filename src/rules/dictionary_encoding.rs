@@ -459,7 +459,7 @@ impl Rule for DictionaryEncodingRule {
             if no_dict_groups > 0 && ratio < LOW_CARDINALITY_RATIO {
                 diagnostics.push(Diagnostic {
                     rule_name: self.name(),
-                    severity: Severity::Info,
+                    severity: Severity::Suggestion,
                     location,
                     message: format!(
                         "low cardinality (~{} distinct / {} non-null = {:.0}%) and no dictionary in \

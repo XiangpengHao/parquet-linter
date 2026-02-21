@@ -6,7 +6,7 @@ use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
-    Info,
+    Suggestion,
     Warning,
     Error,
 }
@@ -14,7 +14,7 @@ pub enum Severity {
 impl fmt::Display for Severity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Severity::Info => write!(f, "info"),
+            Severity::Suggestion => write!(f, "suggestion"),
             Severity::Warning => write!(f, "warning"),
             Severity::Error => write!(f, "error"),
         }
@@ -25,7 +25,7 @@ impl std::str::FromStr for Severity {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "info" => Ok(Severity::Info),
+            "suggestion" => Ok(Severity::Suggestion),
             "warning" => Ok(Severity::Warning),
             "error" => Ok(Severity::Error),
             _ => Err(format!("unknown severity: {s}")),
@@ -108,7 +108,7 @@ pub struct Diagnostic {
 impl Diagnostic {
     pub fn print_colored(&self) {
         let severity_str = match self.severity {
-            Severity::Info => "info".blue().bold(),
+            Severity::Suggestion => "suggestion".blue().bold(),
             Severity::Warning => "warning".yellow().bold(),
             Severity::Error => "error".red().bold(),
         };

@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
             let file = cli
                 .file
                 .ok_or_else(|| anyhow::anyhow!("missing FILE argument for check mode"))?;
-            let severity = cli.severity.unwrap_or(Severity::Info);
+            let severity = cli.severity.unwrap_or(Severity::Suggestion);
             let rules = cli.rules;
 
             let (store, path) = parquet_linter::loader::parse(&file)?;

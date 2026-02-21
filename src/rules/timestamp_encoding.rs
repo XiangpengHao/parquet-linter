@@ -66,7 +66,7 @@ impl Rule for TimestampEncodingRule {
                 let path = col0.column_path().clone();
                 diagnostics.push(Diagnostic {
                     rule_name: self.name(),
-                    severity: Severity::Info,
+                    severity: Severity::Suggestion,
                     location: Location::Column {
                         column: col_idx,
                         path: path.clone(),

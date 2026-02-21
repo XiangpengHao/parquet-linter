@@ -60,7 +60,7 @@ impl Rule for BloomFilterRule {
                 let ndv = card.distinct_count;
                 diagnostics.push(Diagnostic {
                     rule_name: self.name(),
-                    severity: Severity::Info,
+                    severity: Severity::Suggestion,
                     location: Location::Column {
                         column: col_idx,
                         path: path.clone(),
