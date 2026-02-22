@@ -7,6 +7,12 @@ Unleash the performance potential of your Parquet files.
 
 <img src="./doc/teaser.png" width="60%">
 
+## Install
+
+```bash
+cargo install parquet-linter-cli
+```
+
 ## Usage
 
 ```bash
