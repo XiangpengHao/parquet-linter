@@ -363,8 +363,8 @@ impl Rule for DictionaryEncodingRule {
             fallback_groups += sampled_fallback_groups;
             no_dict_groups += sampled_no_dict_groups;
 
-            let card = &ctx.cardinalities[col_idx];
-            let ratio = card.ratio();
+            let col_ctx = &ctx.columns[col_idx];
+            let ratio = col_ctx.cardinality_ratio();
             let location = Location::Column {
                 column: col_idx,
                 path: path.clone(),
@@ -392,7 +392,7 @@ impl Rule for DictionaryEncodingRule {
                             "dictionary data pages fell back to PLAIN in {fallback_groups}/{non_empty_groups} row groups{sampled_suffix}; \
                              estimated cardinality is high (~{} distinct / {} non-null = {:.0}%), \
                              dictionary encoding is not beneficial",
-                            card.distinct_count, card.non_null_count, ratio * 100.0
+                            col_ctx.distinct_count, col_ctx.non_null_count(), ratio * 100.0
                         ),
                         prescription,
                     });
@@ -401,7 +401,7 @@ impl Rule for DictionaryEncodingRule {
                         column_size_totals(row_groups, col_idx);
                     let uncapped_dict_page_size =
                         suggested_dictionary_page_size_limit(estimate_dictionary_payload_bytes(
-                            card.distinct_count,
+                            col_ctx.distinct_count,
                             total_values,
                             total_uncompressed_bytes,
                         ));
@@ -425,8 +425,8 @@ impl Rule for DictionaryEncodingRule {
                                 "dictionary data pages fell back to PLAIN in {fallback_groups}/{non_empty_groups} row groups{sampled_suffix}; \
                                  estimated cardinality is moderate (~{} distinct / {} non-null = {:.0}%), \
                                  required dictionary page size appears larger than {}MB; cap dictionary_page_size_limit at {}MB and reduce row-group size (for example, max_row_group_size={target_max_rows})",
-                                card.distinct_count,
-                                card.non_null_count,
+                                col_ctx.distinct_count,
+                                col_ctx.non_null_count(),
                                 ratio * 100.0,
                                 MAX_DICT_PAGE_SIZE / 1024 / 1024,
                                 MAX_DICT_PAGE_SIZE / 1024 / 1024
@@ -447,7 +447,7 @@ impl Rule for DictionaryEncodingRule {
                                 "dictionary data pages fell back to PLAIN in {fallback_groups}/{non_empty_groups} row groups{sampled_suffix}; \
                                  estimated cardinality is moderate (~{} distinct / {} non-null = {:.0}%), \
                                  dictionary page size may be too small",
-                                card.distinct_count, card.non_null_count, ratio * 100.0
+                                col_ctx.distinct_count, col_ctx.non_null_count(), ratio * 100.0
                             ),
                             prescription,
                         });
@@ -467,7 +467,7 @@ impl Rule for DictionaryEncodingRule {
                     message: format!(
                         "low cardinality (~{} distinct / {} non-null = {:.0}%) and no dictionary in \
                          {no_dict_groups}/{non_empty_groups} row groups; consider enabling dictionary encoding",
-                        card.distinct_count, card.non_null_count, ratio * 100.0
+                        col_ctx.distinct_count, col_ctx.non_null_count(), ratio * 100.0
                     ),
                     prescription,
                 });

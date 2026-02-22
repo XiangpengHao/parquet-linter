@@ -35,7 +35,7 @@ impl Rule for FloatEncodingRule {
             }
 
             // Low cardinality floats are better served by dictionary encoding
-            if ctx.cardinalities[col_idx].ratio() < LOW_CARDINALITY_RATIO {
+            if ctx.columns[col_idx].cardinality_ratio() < LOW_CARDINALITY_RATIO {
                 continue;
             }
 

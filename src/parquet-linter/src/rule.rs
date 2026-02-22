@@ -6,12 +6,12 @@ use parquet::errors::ParquetError;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::reader::{ChunkReader, Length, SerializedPageReader};
 
-use crate::cardinality::ColumnCardinality;
+use crate::column_context::ColumnContext;
 use crate::diagnostic::Diagnostic;
 
 pub struct RuleContext {
     pub metadata: Arc<ParquetMetaData>,
-    pub cardinalities: Vec<ColumnCardinality>,
+    pub columns: Vec<ColumnContext>,
     pub reader: ParquetObjectReader,
 }
 

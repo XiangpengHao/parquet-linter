@@ -9,13 +9,15 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 use crate::rule;
 
-pub struct ColumnCardinality {
-    pub distinct_count: u64,
-    pub non_null_count: u64,
+pub(crate) struct ColumnCardinality {
+    pub(crate) distinct_count: u64,
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) non_null_count: u64,
 }
 
 impl ColumnCardinality {
-    pub fn ratio(&self) -> f64 {
+    #[cfg(test)]
+    fn ratio(&self) -> f64 {
         if self.non_null_count == 0 {
             0.0
         } else {
@@ -30,7 +32,7 @@ const SAMPLE_ROWS: usize = 16_384;
 /// 1. Distinct count from one row group's column statistics
 /// 2. Distinct count inferred from one row group's dictionary page
 /// 3. Sample values from one row group and estimate file-level ratio
-pub async fn estimate(
+pub(crate) async fn estimate(
     reader: &ParquetObjectReader,
     metadata: &ParquetMetaData,
 ) -> Result<Vec<ColumnCardinality>> {
@@ -111,7 +113,7 @@ pub async fn estimate(
         .collect())
 }
 
-fn pick_sample_row_group(metadata: &ParquetMetaData) -> usize {
+pub(crate) fn pick_sample_row_group(metadata: &ParquetMetaData) -> usize {
     metadata
         .row_groups()
         .iter()

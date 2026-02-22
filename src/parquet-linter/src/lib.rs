@@ -1,4 +1,5 @@
 pub mod cardinality;
+pub mod column_context;
 pub mod diagnostic;
 pub mod fix;
 pub mod loader;
@@ -29,10 +30,10 @@ async fn lint_reader(
 ) -> anyhow::Result<Vec<Diagnostic>> {
     use parquet::arrow::async_reader::AsyncFileReader;
     let metadata = reader.clone().get_metadata(None).await?;
-    let cardinalities = cardinality::estimate(&reader, &metadata).await?;
+    let columns = column_context::build(&reader, &metadata).await?;
     let ctx = RuleContext {
         metadata,
-        cardinalities,
+        columns,
         reader,
     };
     let rules = rules::get_rules(rule_names);
