@@ -14,10 +14,22 @@ use parquet_linter::prescription::Prescription;
 use crate::benchmark::Measurement;
 
 #[derive(Parser, Debug)]
-#[command(name = "parquet-leaderboard", about = "Benchmark prescription rewrites on parquet files")]
+#[command(
+    name = "parquet-leaderboard",
+    about = "Benchmark parquet optimizations using linter-generated or custom prescriptions"
+)]
 struct Cli {
-    #[arg(value_name = "PRESCRIPTION_DIR")]
-    prescription_dir: PathBuf,
+    /// Generate prescriptions from parquet-linter for each file in the manifest, then benchmark
+    #[arg(long, conflicts_with = "from_custom_prescription")]
+    from_linter: bool,
+
+    /// Benchmark using a directory of numbered prescription files (0.prescription, 1.prescription, ...)
+    #[arg(long, value_name = "DIR", conflicts_with = "from_linter")]
+    from_custom_prescription: Option<PathBuf>,
+
+    /// Optional parquet URL manifest file (defaults to doc/parquet_files.txt)
+    #[arg(long, value_name = "FILE")]
+    parquet_manifest: Option<PathBuf>,
 
     #[arg(long, default_value = "data")]
     data_dir: PathBuf,
@@ -30,102 +42,50 @@ struct Cli {
 
     #[arg(long, default_value_t = 8192)]
     batch_size: usize,
-
-    /// Download missing parquet files into --data-dir before benchmarking
-    #[arg(long)]
-    download: bool,
 }
 
 #[derive(Debug)]
 struct LoadedPrescription {
     index: usize,
-    path: PathBuf,
+    path: Option<PathBuf>,
     prescription: Prescription,
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let urls = parse_urls(include_str!("../../../doc/parquet_files.txt"));
-    ensure!(!urls.is_empty(), "no parquet URLs found in doc/parquet_files.txt");
     ensure!(cli.batch_size > 0, "--batch-size must be > 0");
     ensure!(cli.iterations > 0, "--iterations must be > 0");
 
-    fs::create_dir_all(&cli.data_dir)?;
-    fs::create_dir_all(&cli.output_dir)?;
-
-    let prescriptions = load_prescriptions(&cli.prescription_dir, urls.len())?;
-    if prescriptions.is_empty() {
-        bail!(
-            "no prescription files found in {} (expected files like 0.prescription)",
-            cli.prescription_dir.display()
-        );
-    }
-
-    let missing_inputs: Vec<_> = prescriptions
-        .iter()
-        .filter_map(|item| {
-            let path = cli.data_dir.join(format!("{}.parquet", item.index));
-            (!path.exists()).then_some(item.index)
-        })
-        .collect();
-
-    if !missing_inputs.is_empty() {
-        if !cli.download {
-            bail!(
-                "missing {} input parquet file(s) in {} (e.g. {}). Re-run with --download to fetch required files.",
-                missing_inputs.len(),
-                cli.data_dir.display(),
-                cli.data_dir.join(format!("{}.parquet", missing_inputs[0])).display()
-            );
+    let manifest_text = match &cli.parquet_manifest {
+        Some(path) => {
+            fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?
         }
+        None => include_str!("../../../doc/parquet_files.txt").to_string(),
+    };
+    let urls = parse_urls(&manifest_text);
+    ensure!(!urls.is_empty(), "no parquet URLs found in doc/parquet_files.txt");
 
-        for item in &prescriptions {
-            let data_path = cli.data_dir.join(format!("{}.parquet", item.index));
-            if data_path.exists() {
-                continue;
-            }
-            let url = urls.get(item.index).ok_or_else(|| {
-                anyhow::anyhow!("missing URL for prescription index {}", item.index)
-            })?;
-            download::download_if_missing(item.index, url, &data_path).await?;
+    match (cli.from_linter, cli.from_custom_prescription.as_deref()) {
+        (true, None) => {
+            run_from_linter(&urls, &cli.data_dir, &cli.output_dir, cli.batch_size, cli.iterations)
+                .await
         }
+        (false, Some(prescription_dir)) => {
+            run_from_custom_prescription(
+                &urls,
+                &cli.data_dir,
+                &cli.output_dir,
+                prescription_dir,
+                cli.batch_size,
+                cli.iterations,
+            )
+            .await
+        }
+        _ => bail!(
+            "must pass exactly one mode: --from-linter or --from-custom-prescription <DIR>"
+        ),
     }
-
-    let mut results = Vec::with_capacity(prescriptions.len());
-    for item in prescriptions {
-        let input_path = cli.data_dir.join(format!("{}.parquet", item.index));
-        let output_path = cli.output_dir.join(format!("{}.parquet", item.index));
-
-        println!(
-            "Applying prescription #{}, {} -> {}",
-            item.index,
-            item.path.display(),
-            output_path.display()
-        );
-        let (store, object_path) = parquet_linter::loader::parse(
-            input_path
-                .to_str()
-                .ok_or_else(|| anyhow::anyhow!("non-utf8 path: {}", input_path.display()))?,
-        )?;
-        parquet_linter::fix::rewrite(store, object_path, &output_path, &item.prescription).await?;
-
-        validate_schema_match(&input_path, &output_path)
-            .with_context(|| format!("schema mismatch for file #{}", item.index))?;
-
-        let original = benchmark::measure(&input_path, cli.batch_size, cli.iterations)?;
-        let output = benchmark::measure(&output_path, cli.batch_size, cli.iterations)?;
-        print_file_summary(item.index, original, output);
-        results.push(report::FileResult {
-            index: item.index,
-            original,
-            output,
-        });
-    }
-
-    println!();
-    report::print(&results);
-    Ok(())
 }
 
 fn parse_urls(text: &str) -> Vec<&str> {
@@ -179,11 +139,166 @@ fn load_prescriptions(dir: &Path, url_count: usize) -> Result<Vec<LoadedPrescrip
         }
         loaded.push(LoadedPrescription {
             index,
-            path,
+            path: Some(path),
             prescription,
         });
     }
     Ok(loaded)
+}
+
+async fn run_from_linter(
+    urls: &[&str],
+    data_dir: &Path,
+    output_dir: &Path,
+    batch_size: usize,
+    iterations: usize,
+) -> Result<()> {
+    fs::create_dir_all(data_dir)?;
+    fs::create_dir_all(output_dir)?;
+
+    ensure_inputs_for_indexes(urls, data_dir, 0..urls.len()).await?;
+
+    let mut prescriptions = Vec::with_capacity(urls.len());
+    for (index, _) in urls.iter().enumerate() {
+        let input_path = data_dir.join(format!("{index}.parquet"));
+        let diagnostics = lint_local_file(&input_path).await?;
+
+        let mut prescription = Prescription::new();
+        for diagnostic in &diagnostics {
+            prescription.extend(diagnostic.prescription.clone());
+        }
+        if let Err(conflict) = prescription.validate() {
+            println!(
+                "Warning: conflicting directives for linter-generated prescription #{} (continuing with last directive wins): {}",
+                index,
+                conflict
+            );
+        }
+        println!(
+            "Linter #{}: {} diagnostics, {} directives",
+            index,
+            diagnostics.len(),
+            prescription.directives().len()
+        );
+        prescriptions.push(LoadedPrescription {
+            index,
+            path: None,
+            prescription,
+        });
+    }
+
+    run_benchmark(urls, data_dir, output_dir, prescriptions, batch_size, iterations).await
+}
+
+async fn run_from_custom_prescription(
+    urls: &[&str],
+    data_dir: &Path,
+    output_dir: &Path,
+    prescription_dir: &Path,
+    batch_size: usize,
+    iterations: usize,
+) -> Result<()> {
+    let prescriptions = load_prescriptions(prescription_dir, urls.len())?;
+    if prescriptions.is_empty() {
+        bail!(
+            "no prescription files found in {} (expected files like 0.prescription)",
+            prescription_dir.display()
+        );
+    }
+    run_benchmark(urls, data_dir, output_dir, prescriptions, batch_size, iterations).await
+}
+
+async fn run_benchmark(
+    urls: &[&str],
+    data_dir: &Path,
+    output_dir: &Path,
+    prescriptions: Vec<LoadedPrescription>,
+    batch_size: usize,
+    iterations: usize,
+) -> Result<()> {
+    fs::create_dir_all(data_dir)?;
+    fs::create_dir_all(output_dir)?;
+
+    let missing_inputs: Vec<_> = prescriptions
+        .iter()
+        .filter_map(|item| {
+            let path = data_dir.join(format!("{}.parquet", item.index));
+            (!path.exists()).then_some(item.index)
+        })
+        .collect();
+
+    if !missing_inputs.is_empty() {
+        println!(
+            "Warning: missing {} input parquet file(s) in {}. Downloading required files now; existing files will be reused.",
+            missing_inputs.len(),
+            data_dir.display()
+        );
+        ensure_inputs_for_indexes(urls, data_dir, missing_inputs.iter().copied()).await?;
+    }
+
+    let mut results = Vec::with_capacity(prescriptions.len());
+    for item in prescriptions {
+        let input_path = data_dir.join(format!("{}.parquet", item.index));
+        let output_path = output_dir.join(format!("{}.parquet", item.index));
+
+        println!(
+            "Applying prescription #{}, {} -> {}",
+            item.index,
+            item.path
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<linter-generated>".to_string()),
+            output_path.display()
+        );
+        let (store, object_path) = parquet_linter::loader::parse(
+            input_path
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("non-utf8 path: {}", input_path.display()))?,
+        )?;
+        parquet_linter::fix::rewrite(store, object_path, &output_path, &item.prescription).await?;
+
+        validate_schema_match(&input_path, &output_path)
+            .with_context(|| format!("schema mismatch for file #{}", item.index))?;
+
+        let original = benchmark::measure(&input_path, batch_size, iterations)?;
+        let output = benchmark::measure(&output_path, batch_size, iterations)?;
+        print_file_summary(item.index, original, output);
+        results.push(report::FileResult {
+            index: item.index,
+            original,
+            output,
+        });
+    }
+
+    println!();
+    report::print(&results);
+    Ok(())
+}
+
+async fn ensure_inputs_for_indexes(
+    urls: &[&str],
+    data_dir: &Path,
+    indexes: impl IntoIterator<Item = usize>,
+) -> Result<()> {
+    for index in indexes {
+        let data_path = data_dir.join(format!("{index}.parquet"));
+        if data_path.exists() {
+            continue;
+        }
+        let url = urls
+            .get(index)
+            .ok_or_else(|| anyhow::anyhow!("missing URL for file index {}", index))?;
+        download::download_if_missing(index, url, &data_path).await?;
+    }
+    Ok(())
+}
+
+async fn lint_local_file(path: &Path) -> Result<Vec<parquet_linter::diagnostic::Diagnostic>> {
+    let (store, object_path) = parquet_linter::loader::parse(
+        path.to_str()
+            .ok_or_else(|| anyhow::anyhow!("non-utf8 path: {}", path.display()))?,
+    )?;
+    parquet_linter::lint(store, object_path, None).await
 }
 
 fn validate_schema_match(original_path: &Path, rewritten_path: &Path) -> Result<()> {

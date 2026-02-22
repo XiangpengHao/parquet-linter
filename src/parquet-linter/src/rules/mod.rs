@@ -1,4 +1,3 @@
-mod bloom_filter;
 mod compression_codec;
 mod compression_ratio;
 mod dictionary_encoding;
@@ -19,7 +18,6 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(dictionary_encoding::DictionaryEncodingRule),
         Box::new(page_size::PageSizeRule),
         Box::new(float_encoding::FloatEncodingRule),
-        Box::new(bloom_filter::BloomFilterRule),
         Box::new(compression_codec::CompressionCodecRule),
         Box::new(timestamp_encoding::TimestampEncodingRule),
         Box::new(string_statistics::StringStatisticsRule),
