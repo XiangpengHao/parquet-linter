@@ -1,6 +1,11 @@
 # parquet-linter
 
+[![Crates.io](https://img.shields.io/crates/v/parquet-linter)](https://crates.io/crates/parquet-linter)
+[![docs.rs](https://img.shields.io/docsrs/parquet-linter)](https://docs.rs/parquet-linter)
+
 Unleash the performance potential of your Parquet files.
+
+<img src="./doc/teaser.png" width="60%">
 
 ## Usage
 

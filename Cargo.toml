@@ -8,7 +8,7 @@ default-members = ["src/parquet-linter-cli"]
 resolver = "3"
 
 [workspace.dependencies]
-parquet-linter = { path = "src/parquet-linter" }
+parquet-linter = { path = "src/parquet-linter", version = "0.1.0" }
 parquet = { version = "57.3.0", features = ["arrow", "async", "object_store"] }
 arrow-array = "57"
 arrow-schema = "57"

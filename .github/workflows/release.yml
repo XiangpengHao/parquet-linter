@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+  pull_request:
+    types: [closed]
+
+jobs:
+  bump-version:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute new version
+        id: version
+        run: |
+          current=$(grep -m1 '^version' src/parquet-linter/Cargo.toml | sed 's/.*"\(.*\)"/\1/')
+          IFS='.' read -r major minor patch <<< "$current"
+          case "${{ inputs.bump }}" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          echo "new=${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
+          echo "Bumping $current → ${major}.${minor}.${patch}"
+
+      - name: Update versions
+        run: |
+          VERSION="${{ steps.version.outputs.new }}"
+          for manifest in src/parquet-linter/Cargo.toml src/parquet-linter-cli/Cargo.toml; do
+            sed -i "0,/^version = .*/s//version = \"${VERSION}\"/" "$manifest"
+          done
+          # Update workspace dependency so CLI picks up the new lib version
+          sed -i "s/^parquet-linter = { path = \"src\/parquet-linter\" }/parquet-linter = { path = \"src\/parquet-linter\", version = \"${VERSION}\" }/" Cargo.toml
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: release/v${{ steps.version.outputs.new }}
+          commit-message: "release: v${{ steps.version.outputs.new }}"
+          title: "release: v${{ steps.version.outputs.new }}"
+          body: "Bump version to ${{ steps.version.outputs.new }} (${{ inputs.bump }})"
+          labels: release
+
+  publish:
+    if: >
+      github.event_name == 'pull_request'
+      && github.event.pull_request.merged == true
+      && contains(github.event.pull_request.labels.*.name, 'release')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish parquet-linter (lib)
+        run: cargo publish -p parquet-linter
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish parquet-linter-cli
+        run: cargo publish -p parquet-linter-cli
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
