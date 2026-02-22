@@ -9,6 +9,11 @@ const LARGE_UNCOMPRESSED_COLUMN_BYTES: i64 = 4 * 1024 * 1024; // 4 MB
 const MIN_COLUMN_BYTES_FOR_CODEC_CHANGE: i64 = 8 * 1024 * 1024; // 8 MB
 const MIN_SINGLE_ROW_GROUP_BYTES_FOR_ZSTD: i64 = 32 * 1024 * 1024; // 32 MB
 const MIN_TEXT_BYTES_FOR_LZ4_UPGRADE: i64 = 32 * 1024 * 1024; // 32 MB
+const MIN_TOTAL_BYTES_FOR_SMALL_CHUNK_LZ4: i64 = 64 * 1024 * 1024; // 64 MB
+const MIN_ROW_GROUPS_FOR_SMALL_CHUNK_LZ4: usize = 64;
+const MAX_AVG_UNCOMPRESSED_CHUNK_BYTES_FOR_LZ4: i64 = 1024 * 1024; // 1 MB
+const MIN_RATIO_FOR_SMALL_CHUNK_LZ4: f64 = 0.55;
+const MAX_RATIO_FOR_SMALL_CHUNK_LZ4: f64 = 0.85;
 const MAX_RATIO_FOR_ZSTD_UPGRADE_FROM_SNAPPY: f64 = 0.90;
 const LOW_COMPRESSION_RATIO_SKIP_ZSTD: f64 = 0.95;
 const LOW_COMPRESSION_RATIO_SKIP_LZ4: f64 = 0.98;
@@ -86,6 +91,35 @@ fn is_text_logical_type(logical_type: Option<&LogicalType>) -> bool {
     )
 }
 
+fn prefer_lz4_for_many_small_snappy_byte_array_chunks(
+    physical_type: PhysicalType,
+    non_empty_groups: usize,
+    total_uncompressed: i64,
+    avg_chunk_uncompressed: i64,
+    aggregated_ratio: Option<f64>,
+    sample_compression: Option<Compression>,
+) -> bool {
+    if physical_type != PhysicalType::BYTE_ARRAY {
+        return false;
+    }
+    if !matches!(sample_compression, Some(Compression::SNAPPY)) {
+        return false;
+    }
+    if non_empty_groups < MIN_ROW_GROUPS_FOR_SMALL_CHUNK_LZ4 {
+        return false;
+    }
+    if total_uncompressed < MIN_TOTAL_BYTES_FOR_SMALL_CHUNK_LZ4 {
+        return false;
+    }
+    if avg_chunk_uncompressed <= 0 || avg_chunk_uncompressed > MAX_AVG_UNCOMPRESSED_CHUNK_BYTES_FOR_LZ4 {
+        return false;
+    }
+    let Some(ratio) = aggregated_ratio else {
+        return false;
+    };
+    (MIN_RATIO_FOR_SMALL_CHUNK_LZ4..=MAX_RATIO_FOR_SMALL_CHUNK_LZ4).contains(&ratio)
+}
+
 #[async_trait::async_trait]
 impl Rule for CompressionCodecRule {
     fn name(&self) -> &'static str {
@@ -108,10 +142,12 @@ impl Rule for CompressionCodecRule {
 
             let mut total_uncompressed = 0i64;
             let mut total_compressed = 0i64;
+            let mut non_empty_groups = 0usize;
             let mut zstd_groups = 0usize;
             let mut lz4_groups = 0usize;
             let mut zstd_sample = None;
             let mut lz4_sample = None;
+            let mut sample_compression = None;
 
             for rg in row_groups {
                 let col = rg.column(col_idx);
@@ -120,6 +156,8 @@ impl Rule for CompressionCodecRule {
                 let compressed_size = col.compressed_size();
                 if uncompressed_size > 0 {
                     total_uncompressed += uncompressed_size;
+                    non_empty_groups += 1;
+                    sample_compression.get_or_insert(compression);
                 }
                 if compressed_size > 0 {
                     total_compressed += compressed_size;
@@ -149,6 +187,11 @@ impl Rule for CompressionCodecRule {
                 Some(total_compressed as f64 / total_uncompressed as f64)
             } else {
                 None
+            };
+            let avg_chunk_uncompressed = if non_empty_groups > 0 {
+                total_uncompressed / non_empty_groups as i64
+            } else {
+                0
             };
 
             if !supports_zstd_upgrade_by_type(physical_type, logical_type) {
@@ -189,7 +232,25 @@ impl Rule for CompressionCodecRule {
                 }
             }
 
-            let chosen = if lz4_groups > zstd_groups {
+            let prefer_lz4_many_small_chunks = prefer_lz4_for_many_small_snappy_byte_array_chunks(
+                physical_type,
+                non_empty_groups,
+                total_uncompressed,
+                avg_chunk_uncompressed,
+                aggregated_ratio,
+                sample_compression,
+            );
+
+            let chosen = if prefer_lz4_many_small_chunks {
+                Some((
+                    CodecRecommendation::Lz4,
+                    non_empty_groups,
+                    (
+                        Compression::SNAPPY,
+                        "many small SNAPPY byte-array chunks are scan/decompression-sensitive",
+                    ),
+                ))
+            } else if lz4_groups > zstd_groups {
                 lz4_sample.map(|sample| (CodecRecommendation::Lz4, lz4_groups, sample))
             } else {
                 zstd_sample
@@ -260,6 +321,32 @@ mod tests {
             CodecRecommendation::ZstdLevel3,
             "default compression policy prefers ZSTD level 3",
         )));
+    }
+
+    #[test]
+    fn prefer_lz4_for_many_small_snappy_byte_array_chunks_matches_file6_like_pattern() {
+        let prefer = prefer_lz4_for_many_small_snappy_byte_array_chunks(
+            PhysicalType::BYTE_ARRAY,
+            240,
+            99_480_415,
+            414_501,
+            Some(0.636),
+            Some(Compression::SNAPPY),
+        );
+        assert!(prefer);
+    }
+
+    #[test]
+    fn prefer_lz4_for_many_small_snappy_byte_array_chunks_rejects_too_compressible() {
+        let prefer = prefer_lz4_for_many_small_snappy_byte_array_chunks(
+            PhysicalType::BYTE_ARRAY,
+            240,
+            99_480_415,
+            414_501,
+            Some(0.30),
+            Some(Compression::SNAPPY),
+        );
+        assert!(!prefer);
     }
 
     #[test]
