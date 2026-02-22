@@ -34,8 +34,7 @@ fn classify_codec_issue(
     compression: Compression,
     uncompressed_size: i64,
 ) -> Option<(CodecRecommendation, &'static str)> {
-    let is_target_zstd =
-        matches!(compression, Compression::ZSTD(level) if level.compression_level() == TARGET_ZSTD_LEVEL);
+    let is_target_zstd = matches!(compression, Compression::ZSTD(level) if level.compression_level() == TARGET_ZSTD_LEVEL);
     let speed_sensitive = uncompressed_size > LARGE_UNCOMPRESSED_COLUMN_BYTES;
 
     if speed_sensitive && matches!(compression, Compression::UNCOMPRESSED | Compression::SNAPPY) {
@@ -101,8 +100,7 @@ impl Rule for CompressionCodecRule {
                 zstd_sample
                     .map(|sample| (CodecRecommendation::ZstdLevel3, zstd_groups, sample))
                     .or_else(|| {
-                        lz4_sample
-                            .map(|sample| (CodecRecommendation::Lz4, lz4_groups, sample))
+                        lz4_sample.map(|sample| (CodecRecommendation::Lz4, lz4_groups, sample))
                     })
             };
 
@@ -158,8 +156,10 @@ mod tests {
 
     #[test]
     fn classify_large_uncompressed_as_lz4() {
-        let got =
-            classify_codec_issue(Compression::UNCOMPRESSED, LARGE_UNCOMPRESSED_COLUMN_BYTES + 1);
+        let got = classify_codec_issue(
+            Compression::UNCOMPRESSED,
+            LARGE_UNCOMPRESSED_COLUMN_BYTES + 1,
+        );
         assert_eq!(
             got,
             Some((

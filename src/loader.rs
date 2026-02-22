@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use object_store::path::Path as ObjectPath;
 use object_store::ObjectStore;
+use object_store::path::Path as ObjectPath;
 
 /// Parse a location string into an object store and path.
 ///

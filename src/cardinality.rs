@@ -85,8 +85,15 @@ pub async fn estimate(
     if is_flat {
         let unresolved: Vec<usize> = (0..num_cols).filter(|&i| result[i].is_none()).collect();
         if !unresolved.is_empty() {
-            sample_cardinalities(reader, metadata, &totals, sample_rg_idx, &unresolved, &mut result)
-                .await?;
+            sample_cardinalities(
+                reader,
+                metadata,
+                &totals,
+                sample_rg_idx,
+                &unresolved,
+                &mut result,
+            )
+            .await?;
         }
     }
 

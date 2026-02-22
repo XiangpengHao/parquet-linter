@@ -234,8 +234,7 @@ fn suggested_max_row_group_size(
         return current_max_rows.max(1);
     }
 
-    let scaled = (current_max_rows as u128)
-        .saturating_mul(MAX_DICT_PAGE_SIZE as u128)
+    let scaled = (current_max_rows as u128).saturating_mul(MAX_DICT_PAGE_SIZE as u128)
         / (uncapped_dictionary_page_size as u128);
     scaled.max(1).min(usize::MAX as u128) as usize
 }
@@ -400,21 +399,18 @@ impl Rule for DictionaryEncodingRule {
                 } else {
                     let (total_values, total_uncompressed_bytes) =
                         column_size_totals(row_groups, col_idx);
-                    let uncapped_dict_page_size = suggested_dictionary_page_size_limit(
-                        estimate_dictionary_payload_bytes(
+                    let uncapped_dict_page_size =
+                        suggested_dictionary_page_size_limit(estimate_dictionary_payload_bytes(
                             card.distinct_count,
                             total_values,
                             total_uncompressed_bytes,
-                        ),
-                    );
+                        ));
                     let capped_dict_page_size = uncapped_dict_page_size.min(MAX_DICT_PAGE_SIZE);
 
                     if uncapped_dict_page_size > MAX_DICT_PAGE_SIZE {
                         let current_max_rows = largest_row_group_rows(row_groups);
-                        let target_max_rows = suggested_max_row_group_size(
-                            current_max_rows,
-                            uncapped_dict_page_size,
-                        );
+                        let target_max_rows =
+                            suggested_max_row_group_size(current_max_rows, uncapped_dict_page_size);
                         let mut prescription = Prescription::new();
                         prescription.push(Directive::SetColumnDictionaryPageSizeLimit(
                             path.clone(),

@@ -66,10 +66,7 @@ pub async fn column_page_reader(
     let rg = metadata.row_group(rg_idx);
     let col = rg.column(col_idx);
     let (offset, length) = col.byte_range();
-    let bytes = reader
-        .clone()
-        .get_bytes(offset..(offset + length))
-        .await?;
+    let bytes = reader.clone().get_bytes(offset..(offset + length)).await?;
     let chunk = ColumnChunk::new(bytes, offset);
     Ok(SerializedPageReader::new(
         Arc::new(chunk),

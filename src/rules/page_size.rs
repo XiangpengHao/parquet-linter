@@ -97,8 +97,12 @@ impl Rule for PageSizeRule {
         };
 
         let mut prescription = Prescription::new();
-        prescription.push(Directive::SetFileMaxRowGroupSize(suggestion.target_max_rows));
-        prescription.push(Directive::SetFileDataPageSizeLimit(IDEAL_DATA_PAGE_SIZE_LIMIT));
+        prescription.push(Directive::SetFileMaxRowGroupSize(
+            suggestion.target_max_rows,
+        ));
+        prescription.push(Directive::SetFileDataPageSizeLimit(
+            IDEAL_DATA_PAGE_SIZE_LIMIT,
+        ));
 
         vec![Diagnostic {
             rule_name: self.name(),

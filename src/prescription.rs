@@ -38,8 +38,7 @@ impl From<Codec> for Compression {
                 GzipLevel::try_new(level.into()).expect("Codec::Gzip level must be in 0..=9"),
             ),
             Codec::Brotli(level) => Compression::BROTLI(
-                BrotliLevel::try_new(level.into())
-                    .expect("Codec::Brotli level must be in 0..=11"),
+                BrotliLevel::try_new(level.into()).expect("Codec::Brotli level must be in 0..=11"),
             ),
             Codec::Zstd(level) => Compression::ZSTD(
                 ZstdLevel::try_new(level).expect("Codec::Zstd level must be in 1..=22"),
@@ -153,7 +152,10 @@ impl Directive {
                 format!("column {} dictionary", Self::column_text(col))
             }
             Directive::SetColumnDictionaryPageSizeLimit(col, _) => {
-                format!("column {} dictionary_page_size_limit", Self::column_text(col))
+                format!(
+                    "column {} dictionary_page_size_limit",
+                    Self::column_text(col)
+                )
             }
             Directive::SetColumnStatistics(col, _) => {
                 format!("column {} statistics", Self::column_text(col))
@@ -222,7 +224,11 @@ impl fmt::Display for Directive {
                 )
             }
             Directive::SetColumnStatistics(col, stats) => {
-                write!(f, "set column {} statistics {stats}", Self::column_text(col))
+                write!(
+                    f,
+                    "set column {} statistics {stats}",
+                    Self::column_text(col)
+                )
             }
             Directive::SetColumnBloomFilter(col, enabled) => {
                 write!(
@@ -271,6 +277,23 @@ impl Prescription {
 
     pub fn extend(&mut self, other: Prescription) {
         self.0.extend(other.0);
+    }
+
+    pub fn parse(text: &str) -> Result<Self, ParseError> {
+        let mut prescription = Prescription::new();
+
+        for (index, raw_line) in text.lines().enumerate() {
+            let line_no = index + 1;
+            let line = raw_line.split('#').next().unwrap_or("").trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            let directive = parse_directive(line, line_no)?;
+            prescription.push(directive);
+        }
+
+        Ok(prescription)
     }
 
     pub fn validate(&self) -> Result<(), ConflictError> {
@@ -368,6 +391,267 @@ impl fmt::Display for ConflictError {
 }
 
 impl std::error::Error for ConflictError {}
+
+#[derive(Debug)]
+pub struct ParseError {
+    pub line: usize,
+    pub message: String,
+}
+
+impl ParseError {
+    fn new(line: usize, message: impl Into<String>) -> Self {
+        Self {
+            line,
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "invalid prescription at line {}: {}",
+            self.line, self.message
+        )
+    }
+}
+
+impl std::error::Error for ParseError {}
+
+fn parse_directive(line: &str, line_no: usize) -> Result<Directive, ParseError> {
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    let Some(head) = tokens.first() else {
+        return Err(ParseError::new(line_no, "empty directive"));
+    };
+    if *head != "set" {
+        return Err(ParseError::new(line_no, "directive must start with 'set'"));
+    }
+
+    let scope = tokens
+        .get(1)
+        .ok_or_else(|| ParseError::new(line_no, "missing scope after 'set'"))?;
+
+    match *scope {
+        "file" => parse_file_directive(&tokens, line_no),
+        "column" => parse_column_directive(&tokens, line_no),
+        _ => Err(ParseError::new(
+            line_no,
+            format!("unknown scope '{}', expected 'file' or 'column'", scope),
+        )),
+    }
+}
+
+fn parse_file_directive(tokens: &[&str], line_no: usize) -> Result<Directive, ParseError> {
+    if tokens.len() != 4 {
+        return Err(ParseError::new(
+            line_no,
+            "file directive must be: set file <property> <value>",
+        ));
+    }
+
+    let property = tokens[2];
+    let value = tokens[3];
+
+    match property {
+        "compression" => parse_codec(value, line_no).map(Directive::SetFileCompression),
+        "max_row_group_size" => {
+            parse_usize(value, line_no, property).map(Directive::SetFileMaxRowGroupSize)
+        }
+        "data_page_size_limit" => {
+            parse_usize(value, line_no, property).map(Directive::SetFileDataPageSizeLimit)
+        }
+        "statistics_truncate_length" => {
+            if value == "none" {
+                Ok(Directive::SetFileStatisticsTruncateLength(None))
+            } else {
+                parse_usize(value, line_no, property)
+                    .map(Some)
+                    .map(Directive::SetFileStatisticsTruncateLength)
+            }
+        }
+        _ => Err(ParseError::new(
+            line_no,
+            format!("unknown file property '{}'", property),
+        )),
+    }
+}
+
+fn parse_column_directive(tokens: &[&str], line_no: usize) -> Result<Directive, ParseError> {
+    if tokens.len() != 5 {
+        return Err(ParseError::new(
+            line_no,
+            "column directive must be: set column <column_path> <property> <value>",
+        ));
+    }
+
+    let column = parse_column_path(tokens[2], line_no)?;
+    let property = tokens[3];
+    let value = tokens[4];
+
+    match property {
+        "compression" => {
+            parse_codec(value, line_no).map(|codec| Directive::SetColumnCompression(column, codec))
+        }
+        "encoding" => parse_data_encoding(value, line_no)
+            .map(|encoding| Directive::SetColumnEncoding(column, encoding)),
+        "dictionary" => parse_bool(value, line_no, property)
+            .map(|enabled| Directive::SetColumnDictionary(column, enabled)),
+        "dictionary_page_size_limit" => parse_usize(value, line_no, property)
+            .map(|size| Directive::SetColumnDictionaryPageSizeLimit(column, size)),
+        "statistics" => parse_statistics(value, line_no)
+            .map(|stats| Directive::SetColumnStatistics(column, stats)),
+        "bloom_filter" => parse_bool(value, line_no, property)
+            .map(|enabled| Directive::SetColumnBloomFilter(column, enabled)),
+        "bloom_filter_ndv" => parse_u64(value, line_no, property)
+            .map(|ndv| Directive::SetColumnBloomFilterNdv(column, ndv)),
+        "bloom_filter_fpp" => parse_f64(value, line_no, property)
+            .map(|fpp| Directive::SetColumnBloomFilterFpp(column, fpp)),
+        _ => Err(ParseError::new(
+            line_no,
+            format!("unknown column property '{}'", property),
+        )),
+    }
+}
+
+fn parse_column_path(value: &str, line_no: usize) -> Result<ColumnPath, ParseError> {
+    let parts: Vec<String> = value.split('.').map(|part| part.to_string()).collect();
+    if parts.is_empty() || parts.iter().any(|part| part.is_empty()) {
+        return Err(ParseError::new(
+            line_no,
+            format!("invalid column path '{}'", value),
+        ));
+    }
+    Ok(ColumnPath::new(parts))
+}
+
+fn parse_codec(value: &str, line_no: usize) -> Result<Codec, ParseError> {
+    match value {
+        "uncompressed" => Ok(Codec::Uncompressed),
+        "snappy" => Ok(Codec::Snappy),
+        "lz4_raw" => Ok(Codec::Lz4Raw),
+        _ => {
+            if let Some(level) = parse_wrapped_i32(value, "zstd", line_no)? {
+                if (1..=22).contains(&level) {
+                    return Ok(Codec::Zstd(level));
+                }
+                return Err(ParseError::new(
+                    line_no,
+                    "zstd level must be between 1 and 22",
+                ));
+            }
+            if let Some(level) = parse_wrapped_i32(value, "gzip", line_no)? {
+                if (0..=9).contains(&level) {
+                    return Ok(Codec::Gzip(level as u8));
+                }
+                return Err(ParseError::new(
+                    line_no,
+                    "gzip level must be between 0 and 9",
+                ));
+            }
+            if let Some(level) = parse_wrapped_i32(value, "brotli", line_no)? {
+                if (0..=11).contains(&level) {
+                    return Ok(Codec::Brotli(level as u8));
+                }
+                return Err(ParseError::new(
+                    line_no,
+                    "brotli level must be between 0 and 11",
+                ));
+            }
+            Err(ParseError::new(
+                line_no,
+                format!("unknown codec '{}'", value),
+            ))
+        }
+    }
+}
+
+fn parse_data_encoding(value: &str, line_no: usize) -> Result<DataEncoding, ParseError> {
+    match value {
+        "plain" => Ok(DataEncoding::Plain),
+        "delta_binary_packed" => Ok(DataEncoding::DeltaBinaryPacked),
+        "delta_length_byte_array" => Ok(DataEncoding::DeltaLengthByteArray),
+        "delta_byte_array" => Ok(DataEncoding::DeltaByteArray),
+        "byte_stream_split" => Ok(DataEncoding::ByteStreamSplit),
+        _ => Err(ParseError::new(
+            line_no,
+            format!("unknown encoding '{}'", value),
+        )),
+    }
+}
+
+fn parse_statistics(value: &str, line_no: usize) -> Result<StatisticsConfig, ParseError> {
+    match value {
+        "none" => Ok(StatisticsConfig::None),
+        "chunk" => Ok(StatisticsConfig::Chunk),
+        "page" => Ok(StatisticsConfig::Page),
+        _ => Err(ParseError::new(
+            line_no,
+            format!("unknown statistics level '{}'", value),
+        )),
+    }
+}
+
+fn parse_wrapped_i32(value: &str, codec: &str, line_no: usize) -> Result<Option<i32>, ParseError> {
+    let Some(inner) = value
+        .strip_prefix(codec)
+        .and_then(|suffix| suffix.strip_prefix('('))
+    else {
+        return Ok(None);
+    };
+    let Some(inner) = inner.strip_suffix(')') else {
+        return Err(ParseError::new(
+            line_no,
+            format!(
+                "invalid {} format '{}', expected {}(<level>)",
+                codec, value, codec
+            ),
+        ));
+    };
+
+    inner.parse::<i32>().map(Some).map_err(|err| {
+        ParseError::new(
+            line_no,
+            format!("invalid {} level '{}': {}", codec, inner, err),
+        )
+    })
+}
+
+fn parse_bool(value: &str, line_no: usize, property: &str) -> Result<bool, ParseError> {
+    value.parse::<bool>().map_err(|err| {
+        ParseError::new(
+            line_no,
+            format!("invalid boolean for {} ('{}'): {}", property, value, err),
+        )
+    })
+}
+
+fn parse_usize(value: &str, line_no: usize, property: &str) -> Result<usize, ParseError> {
+    value.parse::<usize>().map_err(|err| {
+        ParseError::new(
+            line_no,
+            format!("invalid integer for {} ('{}'): {}", property, value, err),
+        )
+    })
+}
+
+fn parse_u64(value: &str, line_no: usize, property: &str) -> Result<u64, ParseError> {
+    value.parse::<u64>().map_err(|err| {
+        ParseError::new(
+            line_no,
+            format!("invalid integer for {} ('{}'): {}", property, value, err),
+        )
+    })
+}
+
+fn parse_f64(value: &str, line_no: usize, property: &str) -> Result<f64, ParseError> {
+    value.parse::<f64>().map_err(|err| {
+        ParseError::new(
+            line_no,
+            format!("invalid float for {} ('{}'): {}", property, value, err),
+        )
+    })
+}
 
 #[cfg(test)]
 mod tests {
@@ -518,7 +802,9 @@ mod tests {
             0.01,
         ));
 
-        let properties = prescription.apply(parquet::file::properties::WriterProperties::builder()).build();
+        let properties = prescription
+            .apply(parquet::file::properties::WriterProperties::builder())
+            .build();
 
         assert_eq!(properties.max_row_group_size(), 65_536);
         assert_eq!(properties.data_page_size_limit(), 1_048_576);
@@ -549,7 +835,10 @@ mod tests {
 
     #[test]
     fn from_codec_covers_all_variants() {
-        assert_eq!(Compression::from(Codec::Uncompressed), Compression::UNCOMPRESSED);
+        assert_eq!(
+            Compression::from(Codec::Uncompressed),
+            Compression::UNCOMPRESSED
+        );
         assert_eq!(Compression::from(Codec::Snappy), Compression::SNAPPY);
         assert_eq!(
             Compression::from(Codec::Gzip(6)),
@@ -585,5 +874,37 @@ mod tests {
             Encoding::from(DataEncoding::ByteStreamSplit),
             Encoding::BYTE_STREAM_SPLIT
         );
+    }
+
+    #[test]
+    fn parse_prescription_text() {
+        let text = r#"
+set file data_page_size_limit 8192
+set file statistics_truncate_length none
+set column user_id compression zstd(3)
+set column user_id encoding byte_stream_split
+set column user_id bloom_filter true
+set column user_id bloom_filter_ndv 50000
+"#;
+
+        let prescription = Prescription::parse(text).expect("valid prescription text");
+        assert_eq!(prescription.directives().len(), 6);
+        assert_eq!(
+            prescription.to_string(),
+            "set file data_page_size_limit 8192\n\
+set file statistics_truncate_length none\n\
+set column user_id compression zstd(3)\n\
+set column user_id encoding byte_stream_split\n\
+set column user_id bloom_filter true\n\
+set column user_id bloom_filter_ndv 50000"
+        );
+    }
+
+    #[test]
+    fn parse_reports_invalid_property_with_line_number() {
+        let text = "set column user_id not_a_property true";
+        let error = Prescription::parse(text).expect_err("invalid property");
+        assert_eq!(error.line, 1);
+        assert!(error.message.contains("unknown column property"));
     }
 }

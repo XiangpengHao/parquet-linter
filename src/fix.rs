@@ -4,15 +4,13 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use futures::StreamExt;
-use object_store::path::Path as ObjectPath;
 use object_store::ObjectStore;
+use object_store::path::Path as ObjectPath;
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use parquet::basic::{Compression, Encoding};
 use parquet::file::metadata::{ParquetMetaData, SortingColumn};
-use parquet::file::properties::{
-    EnabledStatistics, WriterProperties, WriterVersion,
-};
+use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
 
 use crate::prescription::Prescription;
 

@@ -9,8 +9,8 @@ pub mod rules;
 use std::sync::Arc;
 
 use diagnostic::{Diagnostic, Severity};
-use object_store::path::Path as ObjectPath;
 use object_store::ObjectStore;
+use object_store::path::Path as ObjectPath;
 use parquet::arrow::async_reader::ParquetObjectReader;
 use rule::RuleContext;
 
