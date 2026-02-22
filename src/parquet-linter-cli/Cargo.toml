@@ -1,0 +1,15 @@
+[package]
+name = "parquet-linter-cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "parquet-linter"
+path = "src/main.rs"
+
+[dependencies]
+parquet-linter.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+colored.workspace = true
+tokio.workspace = true

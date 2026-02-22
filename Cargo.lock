@@ -1330,7 +1330,6 @@ dependencies = [
  "arrow-schema",
  "async-trait",
  "bytes",
- "clap",
  "colored",
  "futures",
  "object_store",
@@ -1338,6 +1337,17 @@ dependencies = [
  "tempfile",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "parquet-linter-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "colored",
+ "parquet-linter",
+ "tokio",
 ]
 
 [[package]]

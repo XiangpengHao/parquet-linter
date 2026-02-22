@@ -1,13 +1,10 @@
-[package]
-name = "parquet-linter"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+members = ["src/parquet-linter", "src/parquet-linter-cli"]
+default-members = ["src/parquet-linter-cli"]
+resolver = "3"
 
-[[bin]]
-name = "parquet-linter"
-path = "src/main.rs"
-
-[dependencies]
+[workspace.dependencies]
+parquet-linter = { path = "src/parquet-linter" }
 parquet = { version = "57.3.0", features = ["arrow", "async", "object_store"] }
 arrow-array = "57"
 arrow-schema = "57"
@@ -20,6 +17,4 @@ object_store = { version = "0.12.5", features = ["aws", "http"] }
 futures = "0.3"
 tokio = { version = "1", features = ["rt", "macros"] }
 url = "2"
-
-[dev-dependencies]
 tempfile = "3"
