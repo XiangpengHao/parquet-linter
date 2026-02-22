@@ -1,0 +1,7 @@
+https://huggingface.co/datasets/google/MapTrace/resolve/main/maptrace/maptrace_parquet_with_image_description-00004-of-03146.parquet
+https://huggingface.co/datasets/OpenResearcher/OpenResearcher-Dataset/resolve/main/seed_42/train-00001-of-00003.parquet
+https://huggingface.co/datasets/ronantakizawa/github-top-code/resolve/main/data/train/train-00005-of-00020.parquet
+https://huggingface.co/datasets/markov-ai/computer-use/resolve/main/data/train-00009-of-00016.parquet
+https://huggingface.co/datasets/lm-provers/FineProofs-SFT/resolve/main/all/train-00001-of-00003.parquet
+https://huggingface.co/datasets/MongoDB/tech-news-embeddings/resolve/main/tech_news_dump.11.parquet
+https://huggingface.co/datasets/atmallen/amazon_polarity_embeddings_random1/resolve/main/data/train-00002-of-00015-1df0ee42e48fab89.parquet
