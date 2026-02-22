@@ -11,7 +11,7 @@ use parquet_linter::prescription::Prescription;
 #[derive(Parser)]
 #[command(
     name = "parquet-linter",
-    about = "Lint and fix parquet files",
+    about = "Lint and rewrite parquet files",
     args_conflicts_with_subcommands = true,
     arg_required_else_help = true
 )]
@@ -25,9 +25,6 @@ struct Cli {
     /// Minimum severity to display
     #[arg(long)]
     severity: Option<Severity>,
-    /// Print merged prescription DSL from lint results
-    #[arg(long)]
-    print_prescription: bool,
     /// Write merged prescription DSL from lint results to a text file
     #[arg(long, value_name = "FILE")]
     export_prescription: Option<PathBuf>,
@@ -37,10 +34,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Fix issues by rewriting the parquet file
-    Fix {
-        #[command(subcommand)]
-        subcommand: Option<FixSubcommand>,
+    /// Rewrite a parquet file using lint results or a prescription
+    Rewrite {
         /// File path or URL (local, s3://, https://)
         file: Option<String>,
         /// Output file path
@@ -49,37 +44,13 @@ enum Command {
         /// Only apply fixes from specific rules (comma-separated)
         #[arg(long, value_delimiter = ',')]
         rules: Option<Vec<String>>,
+        /// Apply a prescription DSL file directly (without running lint)
+        #[arg(long, value_name = "FILE")]
+        from_prescription: Option<PathBuf>,
         /// Show what would be fixed without writing
         #[arg(long)]
         dry_run: bool,
-        /// Print merged prescription DSL
-        #[arg(long)]
-        print_prescription: bool,
         /// Write merged prescription DSL to a text file
-        #[arg(long, value_name = "FILE")]
-        export_prescription: Option<PathBuf>,
-    },
-}
-
-#[derive(Subcommand)]
-enum FixSubcommand {
-    /// Apply a prescription DSL file directly
-    Load {
-        /// File path or URL (local, s3://, https://)
-        file: String,
-        /// Output file path
-        #[arg(short, long)]
-        output: PathBuf,
-        /// Prescription DSL file path
-        #[arg(long, value_name = "FILE")]
-        prescription: PathBuf,
-        /// Show what would be fixed without writing
-        #[arg(long)]
-        dry_run: bool,
-        /// Print loaded prescription DSL
-        #[arg(long)]
-        print_prescription: bool,
-        /// Write loaded prescription DSL to a text file
         #[arg(long, value_name = "FILE")]
         export_prescription: Option<PathBuf>,
     },
@@ -120,7 +91,6 @@ async fn main() -> Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("missing FILE argument for check mode"))?;
             let severity = cli.severity.unwrap_or(Severity::Suggestion);
             let rules = cli.rules;
-            let print_prescription = cli.print_prescription;
             let export_prescription = cli.export_prescription;
 
             let (store, path) = parquet_linter::loader::parse(&file)?;
@@ -130,7 +100,7 @@ async fn main() -> Result<()> {
                 .filter(|d| d.severity >= severity)
                 .collect();
 
-            if print_prescription || export_prescription.is_some() {
+            if export_prescription.is_some() {
                 let mut prescription = Prescription::new();
                 for diagnostic in &filtered {
                     prescription.extend(diagnostic.prescription.clone());
@@ -144,13 +114,6 @@ async fn main() -> Result<()> {
 
                 if let Some(path) = &export_prescription {
                     write_prescription(path, &prescription)?;
-                }
-                if print_prescription {
-                    if prescription.is_empty() {
-                        println!("{}", "No prescription directives. ✓".cyan().bold());
-                    } else {
-                        println!("{prescription}");
-                    }
                 }
             }
 
@@ -169,21 +132,57 @@ async fn main() -> Result<()> {
                 process::exit(1);
             }
         }
-        Some(Command::Fix {
-            subcommand,
+        Some(Command::Rewrite {
             file,
             output,
             rules,
+            from_prescription,
             dry_run,
-            print_prescription,
             export_prescription,
-        }) => match subcommand {
-            None => {
-                let file =
-                    file.ok_or_else(|| anyhow::anyhow!("missing FILE argument for fix mode"))?;
-                let output =
-                    output.ok_or_else(|| anyhow::anyhow!("missing --output for fix mode"))?;
+        }) => {
+            let file =
+                file.ok_or_else(|| anyhow::anyhow!("missing FILE argument for rewrite mode"))?;
+            let output =
+                output.ok_or_else(|| anyhow::anyhow!("missing --output for rewrite mode"))?;
 
+            if let Some(prescription_path) = from_prescription {
+                if rules.is_some() {
+                    return Err(anyhow::anyhow!(
+                        "--rules cannot be used with --from-prescription"
+                    ));
+                }
+
+                let prescription = read_prescription(&prescription_path)?;
+                if prescription.is_empty() {
+                    println!("{}", "No directives to apply. ✓".green().bold());
+                    return Ok(());
+                }
+                warn_if_conflicting_for_apply(&prescription);
+
+                if let Some(path) = &export_prescription {
+                    write_prescription(path, &prescription)?;
+                }
+
+                if dry_run {
+                    let msg = format!(
+                        "Dry run: {} directive(s) loaded from {}:",
+                        prescription.directives().len(),
+                        prescription_path.display()
+                    );
+                    println!("{}", msg.cyan().bold());
+                    println!("{prescription}");
+                } else {
+                    let (store, path) = parquet_linter::loader::parse(&file)?;
+                    parquet_linter::fix::rewrite(store, path, &output, &prescription).await?;
+                    let msg = format!(
+                        "Applied {} directive(s) from {}, wrote {}",
+                        prescription.directives().len(),
+                        prescription_path.display(),
+                        output.display()
+                    );
+                    println!("{}", msg.green().bold());
+                }
+            } else {
                 let (store, path) = parquet_linter::loader::parse(&file)?;
                 let diagnostics =
                     parquet_linter::lint(store.clone(), path.clone(), rules.as_deref()).await?;
@@ -210,9 +209,6 @@ async fn main() -> Result<()> {
                 if let Some(path) = &export_prescription {
                     write_prescription(path, &prescription)?;
                 }
-                if print_prescription && !dry_run {
-                    println!("{prescription}");
-                }
 
                 if dry_run {
                     let msg = format!(
@@ -231,51 +227,7 @@ async fn main() -> Result<()> {
                     println!("{}", msg.green().bold());
                 }
             }
-            Some(FixSubcommand::Load {
-                file,
-                output,
-                prescription: prescription_path,
-                dry_run,
-                print_prescription: load_print_prescription,
-                export_prescription: load_export_prescription,
-            }) => {
-                let print_prescription = print_prescription || load_print_prescription;
-                let export_prescription = load_export_prescription.or(export_prescription);
-                let prescription = read_prescription(&prescription_path)?;
-                if prescription.is_empty() {
-                    println!("{}", "No directives to apply. ✓".green().bold());
-                    return Ok(());
-                }
-                warn_if_conflicting_for_apply(&prescription);
-
-                if let Some(path) = &export_prescription {
-                    write_prescription(path, &prescription)?;
-                }
-                if print_prescription && !dry_run {
-                    println!("{prescription}");
-                }
-
-                if dry_run {
-                    let msg = format!(
-                        "Dry run: {} directive(s) loaded from {}:",
-                        prescription.directives().len(),
-                        prescription_path.display()
-                    );
-                    println!("{}", msg.cyan().bold());
-                    println!("{prescription}");
-                } else {
-                    let (store, path) = parquet_linter::loader::parse(&file)?;
-                    parquet_linter::fix::rewrite(store, path, &output, &prescription).await?;
-                    let msg = format!(
-                        "Applied {} directive(s) from {}, wrote {}",
-                        prescription.directives().len(),
-                        prescription_path.display(),
-                        output.display()
-                    );
-                    println!("{}", msg.green().bold());
-                }
-            }
-        },
+        }
     }
     Ok(())
 }
