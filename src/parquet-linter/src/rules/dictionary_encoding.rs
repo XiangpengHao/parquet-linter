@@ -138,10 +138,10 @@ fn classify_from_metadata(col: &ColumnChunkMetaData) -> ChunkDictionaryState {
         };
     }
 
-    if let Some(page_stats) = col.page_encoding_stats() {
-        if let Some(summary) = summarize_metadata_page_encodings(page_stats) {
-            return summary.classify();
-        }
+    if let Some(page_stats) = col.page_encoding_stats()
+        && let Some(summary) = summarize_metadata_page_encodings(page_stats)
+    {
+        return summary.classify();
     }
 
     let metadata_has_plain = encodings.iter().any(|e| matches!(e, Encoding::PLAIN));
@@ -330,8 +330,8 @@ impl Rule for DictionaryEncodingRule {
             let mut no_dict_groups = 0usize;
             let mut ambiguous_groups = Vec::new();
 
-            for rg_idx in 0..row_groups.len() {
-                let col = row_groups[rg_idx].column(col_idx);
+            for (rg_idx, row_group) in row_groups.iter().enumerate() {
+                let col = row_group.column(col_idx);
                 if col.num_values() == 0 {
                     continue;
                 }

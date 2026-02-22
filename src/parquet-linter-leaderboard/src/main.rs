@@ -58,18 +58,26 @@ async fn main() -> Result<()> {
     ensure!(cli.iterations > 0, "--iterations must be > 0");
 
     let manifest_text = match &cli.parquet_manifest {
-        Some(path) => {
-            fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?
-        }
+        Some(path) => fs::read_to_string(path)
+            .with_context(|| format!("failed to read {}", path.display()))?,
         None => include_str!("../../../doc/parquet_files.txt").to_string(),
     };
     let urls = parse_urls(&manifest_text);
-    ensure!(!urls.is_empty(), "no parquet URLs found in doc/parquet_files.txt");
+    ensure!(
+        !urls.is_empty(),
+        "no parquet URLs found in doc/parquet_files.txt"
+    );
 
     match (cli.from_linter, cli.from_custom_prescription.as_deref()) {
         (true, None) => {
-            run_from_linter(&urls, &cli.data_dir, &cli.output_dir, cli.batch_size, cli.iterations)
-                .await
+            run_from_linter(
+                &urls,
+                &cli.data_dir,
+                &cli.output_dir,
+                cli.batch_size,
+                cli.iterations,
+            )
+            .await
         }
         (false, Some(prescription_dir)) => {
             run_from_custom_prescription(
@@ -82,9 +90,7 @@ async fn main() -> Result<()> {
             )
             .await
         }
-        _ => bail!(
-            "must pass exactly one mode: --from-linter or --from-custom-prescription <DIR>"
-        ),
+        _ => bail!("must pass exactly one mode: --from-linter or --from-custom-prescription <DIR>"),
     }
 }
 
@@ -128,8 +134,8 @@ fn load_prescriptions(dir: &Path, url_count: usize) -> Result<Vec<LoadedPrescrip
     for (index, path) in by_index {
         let text = fs::read_to_string(&path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        let prescription =
-            Prescription::parse(&text).with_context(|| format!("failed to parse {}", path.display()))?;
+        let prescription = Prescription::parse(&text)
+            .with_context(|| format!("failed to parse {}", path.display()))?;
         if let Err(conflict) = prescription.validate() {
             println!(
                 "Warning: conflicting directives in {} (continuing with last directive wins): {}",
@@ -170,8 +176,7 @@ async fn run_from_linter(
         if let Err(conflict) = prescription.validate() {
             println!(
                 "Warning: conflicting directives for linter-generated prescription #{} (continuing with last directive wins): {}",
-                index,
-                conflict
+                index, conflict
             );
         }
         println!(
@@ -187,7 +192,15 @@ async fn run_from_linter(
         });
     }
 
-    run_benchmark(urls, data_dir, output_dir, prescriptions, batch_size, iterations).await
+    run_benchmark(
+        urls,
+        data_dir,
+        output_dir,
+        prescriptions,
+        batch_size,
+        iterations,
+    )
+    .await
 }
 
 async fn run_from_custom_prescription(
@@ -205,7 +218,15 @@ async fn run_from_custom_prescription(
             prescription_dir.display()
         );
     }
-    run_benchmark(urls, data_dir, output_dir, prescriptions, batch_size, iterations).await
+    run_benchmark(
+        urls,
+        data_dir,
+        output_dir,
+        prescriptions,
+        batch_size,
+        iterations,
+    )
+    .await
 }
 
 async fn run_benchmark(

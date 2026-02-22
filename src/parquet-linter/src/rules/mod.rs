@@ -4,8 +4,8 @@ mod dictionary_encoding;
 mod float_encoding;
 mod page_size;
 mod page_statistics;
-mod string_statistics;
 mod string_encoding;
+mod string_statistics;
 mod timestamp_encoding;
 mod vector_embedding;
 

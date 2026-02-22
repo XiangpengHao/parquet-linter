@@ -52,6 +52,21 @@ File size is the size of the parquet file as reported by file system.
 
 Parquet files are listed in `doc/parquet_files.txt`. They are unmodified Parquet datasets from Hugging Face.
 
+### Current Results (By `parquet-linter`)
+
+All rules enabled. Page statistics are enabled (required). Can you do better?
+
+| File | Old cost | New cost | Change |
+|---|---:|---:|---:|
+| 0 | 468.72 | 475.33 | +1.41% |
+| 1 | 455.16 | 350.27 | -23.04% |
+| 2 | 415.51 | 339.17 | -18.37% |
+| 3 | 123.32 | 122.67 | -0.52% |
+| 4 | 449.38 | 345.03 | -23.22% |
+| 5 | 153.06 | 113.60 | -25.78% |
+| 6 | 646.98 | 581.58 | -10.11% |
+| total | 2712.13 | 2327.66 | -14.18% |
+
 #### Benchmark `parquet-linter`
 
 ```bash
@@ -67,20 +82,6 @@ Create a directory of numbered files (`0.prescription`, `1.prescription`, ...) m
 ./target/release/parquet-leaderboard --from-custom-prescription prescriptions --iterations 3
 ```
 
-### Current Results (By `parquet-linter`)
-
-All rules enabled. Page statistics are enabled (required).
-
-| File | Old cost | New cost | Change |
-|---|---:|---:|---:|
-| 0 | 468.72 | 475.33 | +1.41% |
-| 1 | 455.16 | 350.27 | -23.04% |
-| 2 | 415.51 | 339.17 | -18.37% |
-| 3 | 123.32 | 122.67 | -0.52% |
-| 4 | 449.38 | 345.03 | -23.22% |
-| 5 | 153.06 | 113.60 | -25.78% |
-| 6 | 646.98 | 581.58 | -10.11% |
-| total | 2712.13 | 2327.66 | -14.18% |
 
 ### Limitations
 

@@ -20,11 +20,11 @@ pub fn measure(path: &Path, batch_size: usize, iterations: usize) -> Result<Meas
     for _ in 0..iterations {
         let input = File::open(path)?;
         let builder = ParquetRecordBatchReaderBuilder::try_new(input)?;
-        let mut reader = builder.with_batch_size(batch_size).build()?;
+        let reader = builder.with_batch_size(batch_size).build()?;
 
         let start = Instant::now();
         let mut total_rows = 0usize;
-        while let Some(batch) = reader.next() {
+        for batch in reader {
             total_rows += batch?.num_rows();
         }
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;

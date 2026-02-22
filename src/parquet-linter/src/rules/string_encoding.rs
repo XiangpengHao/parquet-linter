@@ -73,18 +73,16 @@ fn should_prefer_delta_length_byte_array(
     };
     let avg_chunk = summary.avg_chunk_uncompressed();
 
-    let moderate_multi_group_large_chunks =
-        summary.total_uncompressed >= MIN_TOTAL_BYTES
-            && (MIN_NON_EMPTY_GROUPS..=MAX_NON_EMPTY_GROUPS).contains(&summary.non_empty_groups)
-            && avg_chunk >= MIN_AVG_CHUNK_BYTES
-            && (MIN_RATIO..=MAX_RATIO).contains(&ratio);
+    let moderate_multi_group_large_chunks = summary.total_uncompressed >= MIN_TOTAL_BYTES
+        && (MIN_NON_EMPTY_GROUPS..=MAX_NON_EMPTY_GROUPS).contains(&summary.non_empty_groups)
+        && avg_chunk >= MIN_AVG_CHUNK_BYTES
+        && (MIN_RATIO..=MAX_RATIO).contains(&ratio);
 
-    let many_small_chunks =
-        summary.total_uncompressed >= SMALL_CHUNK_MIN_TOTAL_BYTES
-            && summary.non_empty_groups >= SMALL_CHUNK_MIN_GROUPS
-            && avg_chunk > 0
-            && avg_chunk <= SMALL_CHUNK_MAX_AVG_CHUNK_BYTES
-            && (SMALL_CHUNK_MIN_RATIO..=SMALL_CHUNK_MAX_RATIO).contains(&ratio);
+    let many_small_chunks = summary.total_uncompressed >= SMALL_CHUNK_MIN_TOTAL_BYTES
+        && summary.non_empty_groups >= SMALL_CHUNK_MIN_GROUPS
+        && avg_chunk > 0
+        && avg_chunk <= SMALL_CHUNK_MAX_AVG_CHUNK_BYTES
+        && (SMALL_CHUNK_MIN_RATIO..=SMALL_CHUNK_MAX_RATIO).contains(&ratio);
 
     moderate_multi_group_large_chunks || many_small_chunks
 }

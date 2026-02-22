@@ -66,7 +66,14 @@ pub fn print(results: &[FileResult]) {
 
     println!(
         "{:<6} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10}",
-        "------", "----------", "----------", "----------", "----------", "----------", "----------", "----------"
+        "------",
+        "----------",
+        "----------",
+        "----------",
+        "----------",
+        "----------",
+        "----------",
+        "----------"
     );
     println!(
         "{:<6} {:>10.2} {:>10.2} {:>10.2} {:>10.2} {:>10.2} {:>10.2} {:>10}",
@@ -98,12 +105,7 @@ pub fn print(results: &[FileResult]) {
     );
     println!(
         "Diff: size {:+.2} MB ({:+.2}%), time {:+.2} ms ({:+.2}%), cost {:+.2} ({:+.2}%)",
-        size_delta,
-        size_delta_pct,
-        time_delta,
-        time_delta_pct,
-        cost_delta,
-        cost_delta_pct
+        size_delta, size_delta_pct, time_delta, time_delta_pct, cost_delta, cost_delta_pct
     );
 }
 

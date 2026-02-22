@@ -111,7 +111,9 @@ fn prefer_lz4_for_many_small_snappy_byte_array_chunks(
     if total_uncompressed < MIN_TOTAL_BYTES_FOR_SMALL_CHUNK_LZ4 {
         return false;
     }
-    if avg_chunk_uncompressed <= 0 || avg_chunk_uncompressed > MAX_AVG_UNCOMPRESSED_CHUNK_BYTES_FOR_LZ4 {
+    if avg_chunk_uncompressed <= 0
+        || avg_chunk_uncompressed > MAX_AVG_UNCOMPRESSED_CHUNK_BYTES_FOR_LZ4
+    {
         return false;
     }
     let Some(ratio) = aggregated_ratio else {
@@ -204,13 +206,12 @@ impl Rule for CompressionCodecRule {
                 zstd_sample = None;
             }
 
-            if matches!(col0.compression(), Compression::SNAPPY) {
-                if let Some(ratio) = aggregated_ratio {
-                    if ratio >= MAX_RATIO_FOR_ZSTD_UPGRADE_FROM_SNAPPY {
-                        zstd_groups = 0;
-                        zstd_sample = None;
-                    }
-                }
+            if matches!(col0.compression(), Compression::SNAPPY)
+                && let Some(ratio) = aggregated_ratio
+                && ratio >= MAX_RATIO_FOR_ZSTD_UPGRADE_FROM_SNAPPY
+            {
+                zstd_groups = 0;
+                zstd_sample = None;
             }
 
             if let Some(ratio) = aggregated_ratio {
@@ -221,15 +222,17 @@ impl Rule for CompressionCodecRule {
                 }
             }
 
-            if is_text_logical_type(logical_type) && total_uncompressed < MIN_TEXT_BYTES_FOR_LZ4_UPGRADE {
+            if is_text_logical_type(logical_type)
+                && total_uncompressed < MIN_TEXT_BYTES_FOR_LZ4_UPGRADE
+            {
                 lz4_groups = 0;
                 lz4_sample = None;
             }
-            if let Some(ratio) = aggregated_ratio {
-                if ratio > LOW_COMPRESSION_RATIO_SKIP_LZ4 {
-                    lz4_groups = 0;
-                    lz4_sample = None;
-                }
+            if let Some(ratio) = aggregated_ratio
+                && ratio > LOW_COMPRESSION_RATIO_SKIP_LZ4
+            {
+                lz4_groups = 0;
+                lz4_sample = None;
             }
 
             let prefer_lz4_many_small_chunks = prefer_lz4_for_many_small_snappy_byte_array_chunks(
@@ -317,10 +320,13 @@ mod tests {
             Compression::UNCOMPRESSED,
             LARGE_UNCOMPRESSED_COLUMN_BYTES + 1,
         );
-        assert_eq!(got, Some((
-            CodecRecommendation::ZstdLevel3,
-            "default compression policy prefers ZSTD level 3",
-        )));
+        assert_eq!(
+            got,
+            Some((
+                CodecRecommendation::ZstdLevel3,
+                "default compression policy prefers ZSTD level 3",
+            ))
+        );
     }
 
     #[test]

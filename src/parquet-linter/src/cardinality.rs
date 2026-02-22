@@ -165,10 +165,10 @@ async fn dictionary_distinct_count(
         .await
         .ok()?;
     use parquet::column::page::PageReader;
-    while let Ok(Some(page)) = page_reader.get_next_page() {
+    if let Ok(Some(page)) = page_reader.get_next_page() {
         match page {
             Page::DictionaryPage { num_values, .. } => return Some(num_values as u64),
-            Page::DataPage { .. } | Page::DataPageV2 { .. } => break,
+            Page::DataPage { .. } | Page::DataPageV2 { .. } => {}
         }
     }
     None
@@ -249,28 +249,6 @@ fn hash_array_values(array: &dyn Array, set: &mut HashSet<u64>) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ratio_is_zero_when_column_has_no_non_null_values() {
-        let card = ColumnCardinality {
-            distinct_count: 0,
-            non_null_count: 0,
-        };
-        assert_eq!(card.ratio(), 0.0);
-    }
-
-    #[test]
-    fn sampling_distinct_ignores_null_values() {
-        let array = StringArray::from(vec![Some("a"), None, Some("a"), None]);
-        let mut set = HashSet::new();
-        hash_array_values(&array, &mut set);
-        assert_eq!(set.len(), 1);
-    }
-}
-
 fn hash_value(array: &dyn Array, i: usize, hasher: &mut impl Hasher) {
     let any = array.as_any();
 
@@ -327,5 +305,27 @@ fn hash_value(array: &dyn Array, i: usize, hasher: &mut impl Hasher) {
     } else {
         // Unknown type: treat each value as unique
         i.hash(hasher);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ratio_is_zero_when_column_has_no_non_null_values() {
+        let card = ColumnCardinality {
+            distinct_count: 0,
+            non_null_count: 0,
+        };
+        assert_eq!(card.ratio(), 0.0);
+    }
+
+    #[test]
+    fn sampling_distinct_ignores_null_values() {
+        let array = StringArray::from(vec![Some("a"), None, Some("a"), None]);
+        let mut set = HashSet::new();
+        hash_array_values(&array, &mut set);
+        assert_eq!(set.len(), 1);
     }
 }
