@@ -180,23 +180,7 @@ pub async fn build(
         });
     }
 
-    // Sample byte lengths for all BYTE_ARRAY columns.
-    let byte_array_cols: Vec<usize> = columns
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| c.physical_type == PhysicalType::BYTE_ARRAY)
-        .map(|(i, _)| i)
-        .collect();
-    if !byte_array_cols.is_empty() {
-        let mut lengths = sample_byte_lengths(reader, metadata, &byte_array_cols).await?;
-        for (i, col_idx) in byte_array_cols.into_iter().enumerate() {
-            match &mut columns[col_idx].type_stats {
-                TypeStats::String(s) => s.lengths = lengths[i].take(),
-                TypeStats::Binary(b) => b.lengths = lengths[i].take(),
-                _ => {}
-            }
-        }
-    }
+    fill_sampled_stats(reader, metadata, &mut columns).await?;
 
     Ok(columns)
 }
@@ -564,23 +548,46 @@ fn aggregate_binary_minmax(
 
 const SAMPLE_ROWS: usize = 16_384;
 
-/// Sample one row group to compute byte-length statistics for BYTE_ARRAY columns.
-async fn sample_byte_lengths(
+/// Returns true if a column has gaps that sampling can fill.
+fn needs_sampling(c: &ColumnContext) -> bool {
+    match &c.type_stats {
+        TypeStats::Boolean(s) => s.min.is_none() || s.max.is_none(),
+        TypeStats::Int(s) => s.min.is_none() || s.max.is_none(),
+        TypeStats::Float(s) => s.min.is_none() || s.max.is_none(),
+        TypeStats::String(s) => {
+            s.lengths.is_none() || s.min_value.is_none() || s.max_value.is_none()
+        }
+        TypeStats::Binary(b) => {
+            b.lengths.is_none() || b.min_value.is_none() || b.max_value.is_none()
+        }
+        _ => false,
+    }
+}
+
+/// Sample one row group to fill in missing statistics.
+async fn fill_sampled_stats(
     reader: &ParquetObjectReader,
     metadata: &ParquetMetaData,
-    byte_array_cols: &[usize],
-) -> anyhow::Result<Vec<Option<ByteLengthStats>>> {
+    columns: &mut [ColumnContext],
+) -> anyhow::Result<()> {
     use futures::StreamExt;
     use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 
-    if byte_array_cols.is_empty() || metadata.num_row_groups() == 0 {
-        return Ok((0..byte_array_cols.len()).map(|_| None).collect());
+    let sample_cols: Vec<usize> = columns
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| needs_sampling(c))
+        .map(|(i, _)| i)
+        .collect();
+
+    if sample_cols.is_empty() || metadata.num_row_groups() == 0 {
+        return Ok(());
     }
 
     let sample_rg_idx = cardinality::pick_sample_row_group(metadata);
     let mask = parquet::arrow::ProjectionMask::leaves(
         metadata.file_metadata().schema_descr(),
-        byte_array_cols.iter().copied(),
+        sample_cols.iter().copied(),
     );
     let builder = ParquetRecordBatchStreamBuilder::new(reader.clone())
         .await?
@@ -590,80 +597,317 @@ async fn sample_byte_lengths(
         .with_projection(mask);
     let mut stream = builder.build()?;
 
-    let mut min_lens = vec![usize::MAX; byte_array_cols.len()];
-    let mut max_lens = vec![0usize; byte_array_cols.len()];
-    let mut total_lens = vec![0u64; byte_array_cols.len()];
-    let mut counts = vec![0u64; byte_array_cols.len()];
+    // Per-column accumulators for byte-length stats.
+    let mut len_min = vec![usize::MAX; sample_cols.len()];
+    let mut len_max = vec![0usize; sample_cols.len()];
+    let mut len_total = vec![0u64; sample_cols.len()];
+    let mut len_count = vec![0u64; sample_cols.len()];
+
+    // Per-column accumulators for typed min/max.
+    let mut bool_min = vec![None::<bool>; sample_cols.len()];
+    let mut bool_max = vec![None::<bool>; sample_cols.len()];
+    let mut int_min = vec![None::<i64>; sample_cols.len()];
+    let mut int_max = vec![None::<i64>; sample_cols.len()];
+    let mut float_min = vec![None::<f64>; sample_cols.len()];
+    let mut float_max = vec![None::<f64>; sample_cols.len()];
+    let mut string_min = vec![None::<String>; sample_cols.len()];
+    let mut string_max = vec![None::<String>; sample_cols.len()];
+    let mut binary_min = vec![None::<Vec<u8>>; sample_cols.len()];
+    let mut binary_max = vec![None::<Vec<u8>>; sample_cols.len()];
 
     while let Some(batch_result) = stream.next().await {
         let batch = batch_result?;
-        for (i, _) in byte_array_cols.iter().enumerate() {
-            let array = batch.column(i);
-            let (non_null, total_len, batch_min, batch_max) = measure_byte_lengths(array.as_ref());
-            counts[i] += non_null;
-            total_lens[i] += total_len;
-            if non_null > 0 {
-                min_lens[i] = min_lens[i].min(batch_min);
-                max_lens[i] = max_lens[i].max(batch_max);
+        for (i, &col_idx) in sample_cols.iter().enumerate() {
+            let array = batch.column(i).as_ref();
+            match &columns[col_idx].type_stats {
+                TypeStats::Boolean(_) => {
+                    accumulate_bool_minmax(array, &mut bool_min[i], &mut bool_max[i]);
+                }
+                TypeStats::Int(_) => {
+                    accumulate_int_minmax(array, &mut int_min[i], &mut int_max[i]);
+                }
+                TypeStats::Float(_) => {
+                    accumulate_float_minmax(array, &mut float_min[i], &mut float_max[i]);
+                }
+                TypeStats::String(_) => {
+                    accumulate_string_minmax(array, &mut string_min[i], &mut string_max[i]);
+                    accumulate_byte_lengths(
+                        array,
+                        &mut len_min[i],
+                        &mut len_max[i],
+                        &mut len_total[i],
+                        &mut len_count[i],
+                    );
+                }
+                TypeStats::Binary(_) => {
+                    accumulate_binary_minmax(array, &mut binary_min[i], &mut binary_max[i]);
+                    accumulate_byte_lengths(
+                        array,
+                        &mut len_min[i],
+                        &mut len_max[i],
+                        &mut len_total[i],
+                        &mut len_count[i],
+                    );
+                }
+                _ => {}
             }
         }
     }
 
-    Ok((0..byte_array_cols.len())
-        .map(|i| {
-            if counts[i] == 0 {
-                return None;
+    // Write sampled stats back, only filling in values that are still None.
+    for (i, col_idx) in sample_cols.into_iter().enumerate() {
+        let c = &mut columns[col_idx];
+        match &mut c.type_stats {
+            TypeStats::Boolean(s) => {
+                s.min = s.min.or(bool_min[i]);
+                s.max = s.max.or(bool_max[i]);
             }
-            Some(ByteLengthStats {
-                min: min_lens[i],
-                max: max_lens[i],
-                avg: total_lens[i] as f64 / counts[i] as f64,
-            })
-        })
-        .collect())
+            TypeStats::Int(s) => {
+                s.min = s.min.or(int_min[i]);
+                s.max = s.max.or(int_max[i]);
+            }
+            TypeStats::Float(s) => {
+                s.min = s.min.or(float_min[i]);
+                s.max = s.max.or(float_max[i]);
+            }
+            TypeStats::String(s) => {
+                s.min_value = s.min_value.take().or(string_min[i].take());
+                s.max_value = s.max_value.take().or(string_max[i].take());
+                if s.lengths.is_none() && len_count[i] > 0 {
+                    s.lengths = Some(ByteLengthStats {
+                        min: len_min[i],
+                        max: len_max[i],
+                        avg: len_total[i] as f64 / len_count[i] as f64,
+                    });
+                }
+            }
+            TypeStats::Binary(b) => {
+                b.min_value = b.min_value.take().or(binary_min[i].take());
+                b.max_value = b.max_value.take().or(binary_max[i].take());
+                if b.lengths.is_none() && len_count[i] > 0 {
+                    b.lengths = Some(ByteLengthStats {
+                        min: len_min[i],
+                        max: len_max[i],
+                        avg: len_total[i] as f64 / len_count[i] as f64,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
 }
 
-/// Measure byte lengths from an Arrow array, returning (non_null_count, total_length, min_length, max_length).
-fn measure_byte_lengths(array: &dyn arrow_array::Array) -> (u64, u64, usize, usize) {
-    use arrow_array::{Array, BinaryArray, BinaryViewArray, LargeBinaryArray, LargeStringArray, StringArray, StringViewArray};
+fn accumulate_bool_minmax(
+    array: &dyn arrow_array::Array,
+    cur_min: &mut Option<bool>,
+    cur_max: &mut Option<bool>,
+) {
+    use arrow_array::{Array, BooleanArray};
+    let Some(a) = array.as_any().downcast_ref::<BooleanArray>() else {
+        return;
+    };
+    for i in 0..a.len() {
+        if a.is_null(i) {
+            continue;
+        }
+        let v = a.value(i);
+        *cur_min = Some(cur_min.map_or(v, |c| c && v));
+        *cur_max = Some(cur_max.map_or(v, |c| c || v));
+    }
+}
+
+fn accumulate_int_minmax(
+    array: &dyn arrow_array::Array,
+    cur_min: &mut Option<i64>,
+    cur_max: &mut Option<i64>,
+) {
+    use arrow_array::*;
 
     let any = array.as_any();
 
-    macro_rules! measure {
+    macro_rules! acc_int {
         ($arr:expr) => {{
             let a = $arr;
-            let mut count = 0u64;
-            let mut total = 0u64;
-            let mut min = usize::MAX;
-            let mut max = 0usize;
+            for i in 0..a.len() {
+                if a.is_null(i) {
+                    continue;
+                }
+                let v = a.value(i) as i64;
+                *cur_min = Some(cur_min.map_or(v, |c| c.min(v)));
+                *cur_max = Some(cur_max.map_or(v, |c| c.max(v)));
+            }
+        }};
+    }
+
+    if let Some(a) = any.downcast_ref::<Int32Array>() {
+        acc_int!(a);
+    } else if let Some(a) = any.downcast_ref::<Int64Array>() {
+        acc_int!(a);
+    } else if let Some(a) = any.downcast_ref::<Int16Array>() {
+        acc_int!(a);
+    } else if let Some(a) = any.downcast_ref::<Int8Array>() {
+        acc_int!(a);
+    } else if let Some(a) = any.downcast_ref::<UInt32Array>() {
+        acc_int!(a);
+    } else if let Some(a) = any.downcast_ref::<UInt64Array>() {
+        // UInt64 can overflow i64; saturate.
+        for i in 0..a.len() {
+            if a.is_null(i) {
+                continue;
+            }
+            let v = a.value(i).min(i64::MAX as u64) as i64;
+            *cur_min = Some(cur_min.map_or(v, |c| c.min(v)));
+            *cur_max = Some(cur_max.map_or(v, |c| c.max(v)));
+        }
+    } else if let Some(a) = any.downcast_ref::<UInt16Array>() {
+        acc_int!(a);
+    } else if let Some(a) = any.downcast_ref::<UInt8Array>() {
+        acc_int!(a);
+    }
+}
+
+fn accumulate_float_minmax(
+    array: &dyn arrow_array::Array,
+    cur_min: &mut Option<f64>,
+    cur_max: &mut Option<f64>,
+) {
+    use arrow_array::*;
+    let any = array.as_any();
+
+    macro_rules! acc_float {
+        ($arr:expr) => {{
+            let a = $arr;
+            for i in 0..a.len() {
+                if a.is_null(i) {
+                    continue;
+                }
+                let v = a.value(i) as f64;
+                if v.is_nan() {
+                    continue;
+                }
+                *cur_min = Some(cur_min.map_or(v, |c| c.min(v)));
+                *cur_max = Some(cur_max.map_or(v, |c| c.max(v)));
+            }
+        }};
+    }
+
+    if let Some(a) = any.downcast_ref::<Float32Array>() {
+        acc_float!(a);
+    } else if let Some(a) = any.downcast_ref::<Float64Array>() {
+        acc_float!(a);
+    }
+}
+
+fn accumulate_string_minmax(
+    array: &dyn arrow_array::Array,
+    cur_min: &mut Option<String>,
+    cur_max: &mut Option<String>,
+) {
+    use arrow_array::*;
+    let any = array.as_any();
+
+    macro_rules! acc_str {
+        ($arr:expr) => {{
+            let a = $arr;
+            for i in 0..a.len() {
+                if a.is_null(i) {
+                    continue;
+                }
+                let v = a.value(i);
+                if cur_min.as_ref().is_none_or(|c| v < c.as_str()) {
+                    *cur_min = Some(v.to_owned());
+                }
+                if cur_max.as_ref().is_none_or(|c| v > c.as_str()) {
+                    *cur_max = Some(v.to_owned());
+                }
+            }
+        }};
+    }
+
+    if let Some(a) = any.downcast_ref::<StringArray>() {
+        acc_str!(a);
+    } else if let Some(a) = any.downcast_ref::<LargeStringArray>() {
+        acc_str!(a);
+    } else if let Some(a) = any.downcast_ref::<StringViewArray>() {
+        acc_str!(a);
+    }
+}
+
+fn accumulate_binary_minmax(
+    array: &dyn arrow_array::Array,
+    cur_min: &mut Option<Vec<u8>>,
+    cur_max: &mut Option<Vec<u8>>,
+) {
+    use arrow_array::*;
+    let any = array.as_any();
+
+    macro_rules! acc_bin {
+        ($arr:expr) => {{
+            let a = $arr;
+            for i in 0..a.len() {
+                if a.is_null(i) {
+                    continue;
+                }
+                let v = a.value(i);
+                if cur_min.as_ref().is_none_or(|c| v < c.as_slice()) {
+                    *cur_min = Some(v.to_vec());
+                }
+                if cur_max.as_ref().is_none_or(|c| v > c.as_slice()) {
+                    *cur_max = Some(v.to_vec());
+                }
+            }
+        }};
+    }
+
+    if let Some(a) = any.downcast_ref::<BinaryArray>() {
+        acc_bin!(a);
+    } else if let Some(a) = any.downcast_ref::<LargeBinaryArray>() {
+        acc_bin!(a);
+    } else if let Some(a) = any.downcast_ref::<BinaryViewArray>() {
+        acc_bin!(a);
+    }
+}
+
+fn accumulate_byte_lengths(
+    array: &dyn arrow_array::Array,
+    cur_min: &mut usize,
+    cur_max: &mut usize,
+    total: &mut u64,
+    count: &mut u64,
+) {
+    use arrow_array::*;
+    let any = array.as_any();
+
+    macro_rules! acc_len {
+        ($arr:expr) => {{
+            let a = $arr;
             for i in 0..a.len() {
                 if a.is_null(i) {
                     continue;
                 }
                 let len = a.value(i).len();
-                count += 1;
-                total += len as u64;
-                min = min.min(len);
-                max = max.max(len);
+                *count += 1;
+                *total += len as u64;
+                *cur_min = (*cur_min).min(len);
+                *cur_max = (*cur_max).max(len);
             }
-            (count, total, min, max)
         }};
     }
 
     if let Some(a) = any.downcast_ref::<StringArray>() {
-        measure!(a)
+        acc_len!(a);
     } else if let Some(a) = any.downcast_ref::<LargeStringArray>() {
-        measure!(a)
+        acc_len!(a);
     } else if let Some(a) = any.downcast_ref::<StringViewArray>() {
-        measure!(a)
+        acc_len!(a);
     } else if let Some(a) = any.downcast_ref::<BinaryArray>() {
-        measure!(a)
+        acc_len!(a);
     } else if let Some(a) = any.downcast_ref::<LargeBinaryArray>() {
-        measure!(a)
+        acc_len!(a);
     } else if let Some(a) = any.downcast_ref::<BinaryViewArray>() {
-        measure!(a)
-    } else {
-        (0, 0, usize::MAX, 0)
+        acc_len!(a);
     }
 }
 
