@@ -1,6 +1,6 @@
 [package]
 name = "parquet-linter"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Lint and optimize Parquet files for better performance"
 license = "MIT"
