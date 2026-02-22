@@ -43,18 +43,14 @@ Then apply it to another file:
 parquet-linter rewrite other.parquet -o rewritten.parquet --from-prescription prescription.txt
 ```
 
-## Build
-
-```bash
-cargo build --release
-```
-
 ## Leaderboard
 
-Let's see how much we can improve existing parquet files, we define cost as `cost = loading_time_ms + file_size_mb`
+We define `cost = loading_time_ms + file_size_mb`
 
 Loading time is the time it takes to convert parquet file to arrow RecordBatch.
 File size is the size of the parquet file as reported by file system.
+
+Parquet files are listed in `doc/parquet_files.txt`. They are unmodified Parquet datasets from Hugging Face.
 
 #### Benchmark `parquet-linter`
 
@@ -73,13 +69,19 @@ Create a directory of numbered files (`0.prescription`, `1.prescription`, ...) m
 
 ### Current Results (By `parquet-linter`)
 
-| File | Before Cost | New Cost | Change |
+All rules enabled. Page statistics are enabled (required).
+
+| File | Old cost | New cost | Change |
 |---|---:|---:|---:|
-| 0 | 440.30 | 461.93 | +4.91% |
-| 1 | 453.76 | 352.71 | -22.27% |
-| 2 | 391.16 | 313.62 | -19.82% |
-| 3 | 123.37 | 139.48 | +13.05% |
-| 4 | 433.62 | 382.74 | -11.73% |
-| 5 | 151.27 | 130.96 | -13.43% |
-| 6 | 644.52 | 622.04 | -3.49% |
-| total | 2638.01 | 2403.48 | -8.89% |
+| 0 | 447.24 | 440.95 | -1.41% |
+| 1 | 461.83 | 362.99 | -21.40% |
+| 2 | 399.16 | 305.73 | -23.41% |
+| 3 | 123.56 | 119.83 | -3.02% |
+| 4 | 446.94 | 375.05 | -16.08% |
+| 5 | 150.86 | 114.19 | -24.31% |
+| 6 | 642.86 | 594.70 | -7.49% |
+| total | 2672.45 | 2313.43 | -13.43% |
+
+### Limitations
+
+The current leaderboard does not show filter-pushdown results, therefore not reflecting benefits of zone maps and smaller page sizes.

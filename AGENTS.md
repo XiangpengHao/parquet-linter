@@ -9,3 +9,7 @@
 
 1. All test cases are intended for human to read. They are part of the code and documents.
 2. Test cases should be short, concise, yet have high coverage. Writing test cases almost requires highest level of thinking.
+
+## Utils
+
+1. you can use `nix-shell -p duckdb` to investigate parquet files. 

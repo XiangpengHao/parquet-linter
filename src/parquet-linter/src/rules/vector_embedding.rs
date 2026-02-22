@@ -5,7 +5,9 @@ use parquet::basic::Type as PhysicalType;
 
 pub struct VectorEmbeddingRule;
 
-const SMALL_PAGE_SIZE: usize = 8192;
+// 8KB pages are good for point lookups but often hurt full scans. Use a
+// moderate page size to preserve most benefits without over-fragmenting data.
+const SMALL_PAGE_SIZE: usize = 256 * 1024; // 256 KB
 const MIN_ELEMENTS_PER_ROW: i64 = 64;
 
 #[async_trait::async_trait]
