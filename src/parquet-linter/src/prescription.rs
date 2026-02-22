@@ -986,9 +986,7 @@ set column user_id bloom_filter_ndv 50000"
     #[test]
     fn ext_apply_prescription_rejects_conflict() {
         let err = WriterProperties::builder()
-            .apply_prescription(
-                "set column x compression zstd(3)\nset column x compression snappy",
-            )
+            .apply_prescription("set column x compression zstd(3)\nset column x compression snappy")
             .unwrap_err();
         assert!(matches!(err, PrescriptionError::Conflict(_)));
     }
