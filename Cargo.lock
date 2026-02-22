@@ -1351,6 +1351,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "parquet-linter-leaderboard"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arrow-schema",
+ "bytes",
+ "clap",
+ "colored",
+ "futures",
+ "object_store",
+ "parquet",
+ "parquet-linter",
+ "tokio",
+]
+
+[[package]]
 name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"

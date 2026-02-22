@@ -1,5 +1,9 @@
 [workspace]
-members = ["src/parquet-linter", "src/parquet-linter-cli"]
+members = [
+    "src/parquet-linter",
+    "src/parquet-linter-cli",
+    "src/parquet-linter-leaderboard",
+]
 default-members = ["src/parquet-linter-cli"]
 resolver = "3"
 
