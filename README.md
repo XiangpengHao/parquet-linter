@@ -43,6 +43,22 @@ Then apply it to another file:
 parquet-linter rewrite other.parquet -o rewritten.parquet --from-prescription prescription.txt
 ```
 
+### Apply at write time
+
+You can also apply a prescription when initially writing Parquet files, avoiding a rewrite entirely. 
+
+```rust
+use parquet::file::properties::WriterProperties;
+use parquet_linter::prescription::LinterPrescriptionExt;
+
+let props = WriterProperties::builder()
+    .apply_prescription("set file compression zstd(3)\nset column user_id encoding delta_binary_packed")
+    .expect("valid prescription")
+    .build();
+
+// Use `props` with ArrowWriter, AsyncArrowWriter, etc.
+```
+
 ## Leaderboard
 
 We define `cost = loading_time_ms + file_size_mb`

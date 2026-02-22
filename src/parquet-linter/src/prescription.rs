@@ -419,6 +419,61 @@ impl fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
+/// Extension trait that lets users apply a linter prescription to a
+/// `WriterPropertiesBuilder`, so optimized settings take effect at initial
+/// write time rather than requiring a rewrite.
+///
+/// ```
+/// use parquet::file::properties::WriterProperties;
+/// use parquet_linter::prescription::LinterPrescriptionExt;
+///
+/// let props = WriterProperties::builder()
+///     .apply_prescription("set file compression zstd(3)")
+///     .unwrap()
+///     .build();
+/// ```
+pub trait LinterPrescriptionExt {
+    fn apply_prescription(self, text: &str) -> Result<WriterPropertiesBuilder, PrescriptionError>;
+}
+
+impl LinterPrescriptionExt for WriterPropertiesBuilder {
+    fn apply_prescription(self, text: &str) -> Result<WriterPropertiesBuilder, PrescriptionError> {
+        let prescription = Prescription::parse(text)?;
+        prescription.validate()?;
+        Ok(prescription.apply(self))
+    }
+}
+
+/// Unified error for [`LinterPrescriptionExt::apply_prescription`].
+#[derive(Debug)]
+pub enum PrescriptionError {
+    Parse(ParseError),
+    Conflict(ConflictError),
+}
+
+impl fmt::Display for PrescriptionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PrescriptionError::Parse(e) => write!(f, "{e}"),
+            PrescriptionError::Conflict(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for PrescriptionError {}
+
+impl From<ParseError> for PrescriptionError {
+    fn from(e: ParseError) -> Self {
+        PrescriptionError::Parse(e)
+    }
+}
+
+impl From<ConflictError> for PrescriptionError {
+    fn from(e: ConflictError) -> Self {
+        PrescriptionError::Conflict(e)
+    }
+}
+
 fn parse_directive(line: &str, line_no: usize) -> Result<Directive, ParseError> {
     let tokens: Vec<&str> = line.split_whitespace().collect();
     let Some(head) = tokens.first() else {
@@ -656,6 +711,7 @@ fn parse_f64(value: &str, line_no: usize, property: &str) -> Result<f64, ParseEr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use parquet::file::properties::WriterProperties;
 
     #[test]
     fn directive_display_covers_all_variants() {
@@ -906,5 +962,42 @@ set column user_id bloom_filter_ndv 50000"
         let error = Prescription::parse(text).expect_err("invalid property");
         assert_eq!(error.line, 1);
         assert!(error.message.contains("unknown column property"));
+    }
+
+    #[test]
+    fn ext_apply_prescription_on_builder() {
+        let props = WriterProperties::builder()
+            .apply_prescription(
+                "set file compression zstd(3)\nset column user_id encoding delta_binary_packed",
+            )
+            .unwrap()
+            .build();
+
+        assert_eq!(
+            props.compression(&ColumnPath::from("any")),
+            Compression::ZSTD(ZstdLevel::try_new(3).unwrap())
+        );
+        assert_eq!(
+            props.encoding(&ColumnPath::from("user_id")),
+            Some(Encoding::DELTA_BINARY_PACKED)
+        );
+    }
+
+    #[test]
+    fn ext_apply_prescription_rejects_conflict() {
+        let err = WriterProperties::builder()
+            .apply_prescription(
+                "set column x compression zstd(3)\nset column x compression snappy",
+            )
+            .unwrap_err();
+        assert!(matches!(err, PrescriptionError::Conflict(_)));
+    }
+
+    #[test]
+    fn ext_apply_prescription_rejects_parse_error() {
+        let err = WriterProperties::builder()
+            .apply_prescription("garbage")
+            .unwrap_err();
+        assert!(matches!(err, PrescriptionError::Parse(_)));
     }
 }
