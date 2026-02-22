@@ -79,20 +79,14 @@ File size is the size of the parquet file as reported by file system.
 
 Parquet files are listed in `doc/parquet_files.txt`. They are unmodified Parquet datasets from Hugging Face.
 
-### Current Results (By `parquet-linter`)
+### Current Results
 
 All rules enabled. Page statistics are enabled (required). Can you do better?
 
-| File | Old cost | New cost | Change |
-|---|---:|---:|---:|
-| 0 | 468.72 | 475.33 | +1.41% |
-| 1 | 455.16 | 350.27 | -23.04% |
-| 2 | 415.51 | 339.17 | -18.37% |
-| 3 | 123.32 | 122.67 | -0.52% |
-| 4 | 449.38 | 345.03 | -23.22% |
-| 5 | 153.06 | 113.60 | -25.78% |
-| 6 | 646.98 | 581.58 | -10.11% |
-| total | 2712.13 | 2327.66 | -14.18% |
+| | File 0 | File 1 | File 2 | File 3 | File 4 | File 5 | File 6 | **Total** |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| HuggingFace default | 468.72 | 455.16 | 415.51 | 123.32 | 449.38 | 153.06 | 646.98 | **2712.13** |
+| **parquet-linter** | 475.33 (+1%) | 350.27 (-23%) | 339.17 (-18%) | 122.67 (-1%) | 345.03 (-23%) | 113.60 (-26%) | 581.58 (-10%) | **2327.66 (-14%)** |
 
 #### Benchmark `parquet-linter`
 
