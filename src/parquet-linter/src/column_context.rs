@@ -617,6 +617,13 @@ async fn fill_sampled_stats(
 
     while let Some(batch_result) = stream.next().await {
         let batch = batch_result?;
+        // For nested schemas, projecting Parquet leaf columns can yield fewer
+        // Arrow columns (Arrow returns top-level fields). Sampling stats here
+        // assumes a 1:1 leaf-column mapping, so skip sampling instead of
+        // panicking or misapplying sampled stats.
+        if batch.num_columns() != sample_cols.len() {
+            return Ok(());
+        }
         for (i, &col_idx) in sample_cols.iter().enumerate() {
             let array = batch.column(i).as_ref();
             match &columns[col_idx].type_stats {
