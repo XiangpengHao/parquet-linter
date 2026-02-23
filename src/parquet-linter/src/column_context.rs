@@ -192,16 +192,15 @@ fn derive_arrow_types(metadata: &ParquetMetaData) -> Vec<DataType> {
 
     // For flat schemas, parquet_to_arrow_schema gives a 1:1 mapping.
     let is_flat = schema_descr.root_schema().get_fields().len() == num_cols;
-    if is_flat {
-        if let Ok(arrow_schema) =
+    if is_flat
+        && let Ok(arrow_schema) =
             parquet::arrow::parquet_to_arrow_schema(schema_descr, key_value_metadata)
-        {
-            return arrow_schema
-                .fields()
-                .iter()
-                .map(|f| f.data_type().clone())
-                .collect();
-        }
+    {
+        return arrow_schema
+            .fields()
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect();
     }
 
     // Fallback: derive per-column from physical/logical type.
@@ -345,10 +344,7 @@ fn extract_type_stats(
             let is_string = matches!(
                 logical_type,
                 Some(
-                    LogicalType::String
-                        | LogicalType::Json
-                        | LogicalType::Enum
-                        | LogicalType::Bson
+                    LogicalType::String | LogicalType::Json | LogicalType::Enum | LogicalType::Bson
                 )
             );
             if is_string {
@@ -367,11 +363,9 @@ fn extract_type_stats(
                 })
             }
         }
-        PhysicalType::FIXED_LEN_BYTE_ARRAY => {
-            TypeStats::FixedLenBinary(FixedLenBinaryStats {
-                type_length: descr.type_length(),
-            })
-        }
+        PhysicalType::FIXED_LEN_BYTE_ARRAY => TypeStats::FixedLenBinary(FixedLenBinaryStats {
+            type_length: descr.type_length(),
+        }),
         _ => TypeStats::Unknown,
     }
 }
@@ -492,21 +486,21 @@ fn aggregate_string_minmax(
         let Some(stats) = col.statistics() else {
             continue;
         };
-        if stats.min_is_exact() {
-            if let Some(min_bytes) = stats.min_bytes_opt() {
-                global_min = Some(match global_min {
-                    Some(cur) if cur.as_slice() <= min_bytes => cur,
-                    _ => min_bytes.to_vec(),
-                });
-            }
+        if stats.min_is_exact()
+            && let Some(min_bytes) = stats.min_bytes_opt()
+        {
+            global_min = Some(match global_min {
+                Some(cur) if cur.as_slice() <= min_bytes => cur,
+                _ => min_bytes.to_vec(),
+            });
         }
-        if stats.max_is_exact() {
-            if let Some(max_bytes) = stats.max_bytes_opt() {
-                global_max = Some(match global_max {
-                    Some(cur) if cur.as_slice() >= max_bytes => cur,
-                    _ => max_bytes.to_vec(),
-                });
-            }
+        if stats.max_is_exact()
+            && let Some(max_bytes) = stats.max_bytes_opt()
+        {
+            global_max = Some(match global_max {
+                Some(cur) if cur.as_slice() >= max_bytes => cur,
+                _ => max_bytes.to_vec(),
+            });
         }
     }
     (
@@ -526,21 +520,21 @@ fn aggregate_binary_minmax(
         let Some(stats) = col.statistics() else {
             continue;
         };
-        if stats.min_is_exact() {
-            if let Some(min_bytes) = stats.min_bytes_opt() {
-                global_min = Some(match global_min {
-                    Some(cur) if cur.as_slice() <= min_bytes => cur,
-                    _ => min_bytes.to_vec(),
-                });
-            }
+        if stats.min_is_exact()
+            && let Some(min_bytes) = stats.min_bytes_opt()
+        {
+            global_min = Some(match global_min {
+                Some(cur) if cur.as_slice() <= min_bytes => cur,
+                _ => min_bytes.to_vec(),
+            });
         }
-        if stats.max_is_exact() {
-            if let Some(max_bytes) = stats.max_bytes_opt() {
-                global_max = Some(match global_max {
-                    Some(cur) if cur.as_slice() >= max_bytes => cur,
-                    _ => max_bytes.to_vec(),
-                });
-            }
+        if stats.max_is_exact()
+            && let Some(max_bytes) = stats.max_bytes_opt()
+        {
+            global_max = Some(match global_max {
+                Some(cur) if cur.as_slice() >= max_bytes => cur,
+                _ => max_bytes.to_vec(),
+            });
         }
     }
     (global_min, global_max)
