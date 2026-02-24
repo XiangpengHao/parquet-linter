@@ -3,7 +3,8 @@
 [![Crates.io](https://img.shields.io/crates/v/parquet-linter)](https://crates.io/crates/parquet-linter)
 [![docs.rs](https://img.shields.io/docsrs/parquet-linter)](https://docs.rs/parquet-linter)
 
-Unleash the performance potential of your Parquet files.
+Unleash the performance potential of your Parquet files. 
+Checkout our [blog post](https://blog.xiangpeng.systems/posts/parquet-linter/) for more details.
 
 <img src="./doc/teaser.png" width="60%">
 
@@ -72,10 +73,10 @@ let props = WriterProperties::builder()
 
 ## Leaderboard
 
-We define `cost = loading_time_ms + file_size_mb`
+We track two metrics separately:
 
-Loading time is the time it takes to convert parquet file to arrow RecordBatch.
-File size is the size of the parquet file as reported by file system.
+- `decode time (ms)`: time to convert a Parquet file into Arrow `RecordBatch`es
+- `file size (MB)`: size of the Parquet file on disk
 
 Parquet files are listed in `doc/parquet_files.txt`. They are unmodified Parquet datasets from Hugging Face.
 
@@ -83,10 +84,19 @@ Parquet files are listed in `doc/parquet_files.txt`. They are unmodified Parquet
 
 All rules enabled. Page statistics are enabled (required). Can you do better?
 
+#### File Size Leaderboard (MB, lower is better)
+
 | | File 0 | File 1 | File 2 | File 3 | File 4 | File 5 | File 6 | **Total** |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| HuggingFace default | 468.72 | 455.16 | 415.51 | 123.32 | 449.38 | 153.06 | 646.98 | **2712.13** |
-| **parquet-linter** | 475.33 (+1%) | 350.27 (-23%) | 339.17 (-18%) | 122.67 (-1%) | 345.03 (-23%) | 113.60 (-26%) | 581.58 (-10%) | **2327.66 (-14%)** |
+| HuggingFace default | 171.38 | 137.88 | 105.55 | 88.78 | 145.97 | 62.59 | 247.95 | **960.10** |
+| **parquet-linter** | 171.35 (-0.02%) | 128.31 (-6.94%) | 90.10 (-14.64%) | 71.70 (-19.24%) | 141.41 (-3.12%) | 58.08 (-7.21%) | 244.73 (-1.30%) | **905.68 (-5.67%)** |
+
+#### Decode Time Leaderboard (ms, lower is better)
+
+| | File 0 | File 1 | File 2 | File 3 | File 4 | File 5 | File 6 | **Total** |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| HuggingFace default | 243.59 | 302.44 | 272.20 | 27.34 | 285.08 | 84.62 | 377.25 | **1592.53** |
+| **parquet-linter** | 237.92 (-2.33%) | 212.03 (-29.89%) | 213.47 (-21.58%) | 38.43 (+40.56%) | 205.84 (-27.80%) | 51.36 (-39.31%) | 322.11 (-14.62%) | **1281.15 (-19.55%)** |
 
 #### Benchmark `parquet-linter`
 
