@@ -1,9 +1,11 @@
 mod benchmark;
 mod download;
 mod report;
+mod server;
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -19,6 +21,18 @@ use crate::benchmark::Measurement;
     about = "Benchmark parquet optimizations using linter-generated or custom prescriptions"
 )]
 struct Cli {
+    /// Start HTTP benchmark server mode for LLM evaluation
+    #[arg(
+        long,
+        conflicts_with = "from_linter",
+        conflicts_with = "from_custom_prescription"
+    )]
+    server: bool,
+
+    /// Listen address for --server mode
+    #[arg(long, default_value = "127.0.0.1:3000")]
+    listen: SocketAddr,
+
     /// Generate prescriptions from parquet-linter for each file in the manifest, then benchmark
     #[arg(long, conflicts_with = "from_custom_prescription")]
     from_linter: bool,
@@ -67,6 +81,18 @@ async fn main() -> Result<()> {
         !urls.is_empty(),
         "no parquet URLs found in doc/parquet_files.txt"
     );
+
+    if cli.server {
+        let urls = urls.into_iter().map(ToOwned::to_owned).collect();
+        return server::run(
+            urls,
+            cli.data_dir,
+            cli.batch_size,
+            cli.iterations,
+            cli.listen,
+        )
+        .await;
+    }
 
     match (cli.from_linter, cli.from_custom_prescription.as_deref()) {
         (true, None) => {

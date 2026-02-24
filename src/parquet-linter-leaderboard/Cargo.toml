@@ -17,5 +17,7 @@ anyhow.workspace = true
 colored.workspace = true
 object_store.workspace = true
 futures.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["net"] }
 bytes.workspace = true
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }

@@ -1,4 +1,6 @@
 use std::fs::File;
+use std::io::Cursor;
+use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -216,21 +218,40 @@ pub async fn rewrite(
     output: &Path,
     prescription: &Prescription,
 ) -> Result<()> {
+    let output_file = File::create(output)?;
+    let _ = rewrite_with_writer(store, path, output_file, prescription).await?;
+    Ok(())
+}
+
+pub async fn rewrite_to_bytes(
+    store: Arc<dyn ObjectStore>,
+    path: ObjectPath,
+    prescription: &Prescription,
+) -> Result<Vec<u8>> {
+    let cursor = Cursor::new(Vec::new());
+    let cursor = rewrite_with_writer(store, path, cursor, prescription).await?;
+    Ok(cursor.into_inner())
+}
+
+async fn rewrite_with_writer<W: Write + Send>(
+    store: Arc<dyn ObjectStore>,
+    path: ObjectPath,
+    output: W,
+    prescription: &Prescription,
+) -> Result<W> {
     let reader = ParquetObjectReader::new(store, path);
     let builder = ParquetRecordBatchStreamBuilder::new(reader).await?;
     let props = build_writer_properties_with_base(builder.metadata(), prescription);
     let schema = builder.schema().clone();
     let mut stream = builder.build()?;
-
-    let output_file = File::create(output)?;
-    let mut writer = ArrowWriter::try_new(output_file, schema, Some(props))?;
+    let mut writer = ArrowWriter::try_new(output, schema, Some(props))?;
 
     while let Some(batch) = stream.next().await {
         let batch = batch?;
         writer.write(&batch)?;
     }
-    writer.close()?;
-    Ok(())
+    writer.finish()?;
+    Ok(writer.into_inner()?)
 }
 
 #[cfg(test)]

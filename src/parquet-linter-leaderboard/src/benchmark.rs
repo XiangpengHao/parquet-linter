@@ -4,6 +4,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use anyhow::Result;
+use bytes::Bytes;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 #[derive(Debug, Clone, Copy)]
@@ -34,6 +35,34 @@ pub fn measure(path: &Path, batch_size: usize, iterations: usize) -> Result<Meas
     }
 
     let file_size_mb = fs::metadata(path)?.len() as f64 / (1024.0 * 1024.0);
+    Ok(Measurement {
+        loading_time_ms: best_loading_time_ms,
+        file_size_mb,
+        cost: best_loading_time_ms + file_size_mb,
+    })
+}
+
+pub fn measure_bytes(bytes: &[u8], batch_size: usize, iterations: usize) -> Result<Measurement> {
+    let iterations = iterations.max(1);
+    let file_size_mb = bytes.len() as f64 / (1024.0 * 1024.0);
+    let bytes = Bytes::copy_from_slice(bytes);
+    let mut best_loading_time_ms = f64::INFINITY;
+
+    for _ in 0..iterations {
+        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes.clone())?;
+        let reader = builder.with_batch_size(batch_size).build()?;
+
+        let start = Instant::now();
+        let mut total_rows = 0usize;
+        for batch in reader {
+            total_rows += batch?.num_rows();
+        }
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let _ = total_rows;
+
+        best_loading_time_ms = best_loading_time_ms.min(elapsed_ms);
+    }
+
     Ok(Measurement {
         loading_time_ms: best_loading_time_ms,
         file_size_mb,

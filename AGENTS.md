@@ -1,6 +1,6 @@
 ## Engineering principles
 
-1. Think about minimal changes to complete the task.
+1. Think about best practices to complete the task.
 2. Always cargo check after coding.
 3. Consider refactoring when a function needs more than 3 args.
 4. Whenever writing a if or edge case condition, (1) think why it is needed here, whether it is a real edge case, (2) think whether we can move the condition upper to the caller, i.e., is this the best place to handle edge case?
