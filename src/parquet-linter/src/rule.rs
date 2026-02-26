@@ -13,6 +13,7 @@ pub struct RuleContext {
     pub metadata: Arc<ParquetMetaData>,
     pub columns: Vec<ColumnContext>,
     pub reader: ParquetObjectReader,
+    pub gpu: bool,
 }
 
 #[async_trait::async_trait]

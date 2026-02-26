@@ -2,6 +2,7 @@ mod compression_codec;
 mod compression_ratio;
 mod dictionary_encoding;
 mod float_encoding;
+mod gpu_page_count;
 mod page_size;
 mod page_statistics;
 mod string_encoding;
@@ -19,6 +20,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(dictionary_encoding::DictionaryEncodingRule),
         Box::new(page_size::PageSizeRule),
         Box::new(float_encoding::FloatEncodingRule),
+        Box::new(gpu_page_count::GpuPageCountRule),
         Box::new(string_encoding::StringEncodingRule),
         Box::new(compression_codec::CompressionCodecRule),
         Box::new(timestamp_encoding::TimestampEncodingRule),
