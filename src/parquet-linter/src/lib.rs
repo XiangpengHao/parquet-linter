@@ -45,7 +45,8 @@ async fn lint_reader(
 ) -> anyhow::Result<Vec<Diagnostic>> {
     use parquet::arrow::async_reader::AsyncFileReader;
     let metadata = if options.gpu {
-        let arrow_options = parquet::arrow::arrow_reader::ArrowReaderOptions::new().with_page_index(true);
+        let arrow_options =
+            parquet::arrow::arrow_reader::ArrowReaderOptions::new().with_page_index(true);
         reader.clone().get_metadata(Some(&arrow_options)).await?
     } else {
         reader.clone().get_metadata(None).await?
