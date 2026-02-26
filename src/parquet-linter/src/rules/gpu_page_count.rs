@@ -82,7 +82,7 @@ async fn row_group_column_page_counts(
 #[async_trait::async_trait]
 impl Rule for GpuPageCountRule {
     fn name(&self) -> &'static str {
-        "gpu-row-group-page-count"
+        "gpu-page-count"
     }
 
     async fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
@@ -113,7 +113,7 @@ impl Rule for GpuPageCountRule {
                 total_pages: 0,
                 non_empty_columns: 0,
             };
-            // Aggregate column page counts across row groups so warnings can be emitted per column.
+            // Aggregate column page counts across row groups.
             for column in column_counts {
                 page_count.total_pages += column.pages;
                 page_count.non_empty_columns += 1;
@@ -150,7 +150,7 @@ impl Rule for GpuPageCountRule {
                     severity: Severity::Warning,
                     location: Location::File,
                     message: format!(
-                        "GPU page-count check could not read page counts for {read_failed_row_groups} row group(s); results may be incomplete"
+                        "page count check could not read page counts for {read_failed_row_groups} row groups; results may be incomplete"
                     ),
                     prescription: Prescription::new(),
                 }];
