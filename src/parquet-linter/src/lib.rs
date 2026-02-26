@@ -24,14 +24,6 @@ pub async fn lint(
     store: Arc<dyn ObjectStore>,
     path: ObjectPath,
     rule_names: Option<&[String]>,
-) -> anyhow::Result<Vec<Diagnostic>> {
-    lint_with_options(store, path, rule_names, LintOptions::default()).await
-}
-
-pub async fn lint_with_options(
-    store: Arc<dyn ObjectStore>,
-    path: ObjectPath,
-    rule_names: Option<&[String]>,
     options: LintOptions,
 ) -> anyhow::Result<Vec<Diagnostic>> {
     let reader = ParquetObjectReader::new(store, path);

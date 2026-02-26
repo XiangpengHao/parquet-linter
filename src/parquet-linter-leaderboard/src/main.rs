@@ -319,7 +319,13 @@ async fn lint_local_file(path: &Path) -> Result<Vec<parquet_linter::diagnostic::
         path.to_str()
             .ok_or_else(|| anyhow::anyhow!("non-utf8 path: {}", path.display()))?,
     )?;
-    parquet_linter::lint(store, object_path, None).await
+    parquet_linter::lint(
+        store,
+        object_path,
+        None,
+        parquet_linter::LintOptions::default(),
+    )
+    .await
 }
 
 fn validate_schema_match(original_path: &Path, rewritten_path: &Path) -> Result<()> {

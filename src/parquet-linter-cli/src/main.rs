@@ -99,8 +99,7 @@ async fn main() -> Result<()> {
 
             let (store, path) = parquet_linter::loader::parse(&file)?;
             let diagnostics =
-                parquet_linter::lint_with_options(store, path, rules.as_deref(), lint_options)
-                    .await?;
+                parquet_linter::lint(store, path, rules.as_deref(), lint_options).await?;
             let filtered: Vec<_> = diagnostics
                 .iter()
                 .filter(|d| d.severity >= severity)
@@ -190,7 +189,7 @@ async fn main() -> Result<()> {
                 }
             } else {
                 let (store, path) = parquet_linter::loader::parse(&file)?;
-                let diagnostics = parquet_linter::lint_with_options(
+                let diagnostics = parquet_linter::lint(
                     store.clone(),
                     path.clone(),
                     rules.as_deref(),
