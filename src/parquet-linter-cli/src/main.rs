@@ -22,6 +22,9 @@ struct Cli {
     /// Only run specific rules (comma-separated)
     #[arg(long, value_delimiter = ',')]
     rules: Option<Vec<String>>,
+    /// Enable GPU-specific lint checks
+    #[arg(long = "GPU")]
+    gpu: bool,
     /// Minimum severity to display
     #[arg(long)]
     severity: Option<Severity>,
@@ -92,9 +95,11 @@ async fn main() -> Result<()> {
             let severity = cli.severity.unwrap_or(Severity::Suggestion);
             let rules = cli.rules;
             let export_prescription = cli.export_prescription;
+            let lint_options = parquet_linter::LintOptions { gpu: cli.gpu };
 
             let (store, path) = parquet_linter::loader::parse(&file)?;
-            let diagnostics = parquet_linter::lint(store, path, rules.as_deref()).await?;
+            let diagnostics =
+                parquet_linter::lint(store, path, rules.as_deref(), lint_options).await?;
             let filtered: Vec<_> = diagnostics
                 .iter()
                 .filter(|d| d.severity >= severity)
@@ -184,8 +189,13 @@ async fn main() -> Result<()> {
                 }
             } else {
                 let (store, path) = parquet_linter::loader::parse(&file)?;
-                let diagnostics =
-                    parquet_linter::lint(store.clone(), path.clone(), rules.as_deref()).await?;
+                let diagnostics = parquet_linter::lint(
+                    store.clone(),
+                    path.clone(),
+                    rules.as_deref(),
+                    parquet_linter::LintOptions { gpu: cli.gpu },
+                )
+                .await?;
                 let mut prescription = Prescription::new();
                 for diagnostic in &diagnostics {
                     prescription.extend(diagnostic.prescription.clone());

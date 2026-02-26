@@ -15,26 +15,40 @@ use object_store::path::Path as ObjectPath;
 use parquet::arrow::async_reader::ParquetObjectReader;
 use rule::RuleContext;
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LintOptions {
+    pub gpu: bool,
+}
+
 pub async fn lint(
     store: Arc<dyn ObjectStore>,
     path: ObjectPath,
     rule_names: Option<&[String]>,
+    options: LintOptions,
 ) -> anyhow::Result<Vec<Diagnostic>> {
     let reader = ParquetObjectReader::new(store, path);
-    lint_reader(reader, rule_names).await
+    lint_reader(reader, rule_names, options).await
 }
 
 async fn lint_reader(
     reader: ParquetObjectReader,
     rule_names: Option<&[String]>,
+    options: LintOptions,
 ) -> anyhow::Result<Vec<Diagnostic>> {
     use parquet::arrow::async_reader::AsyncFileReader;
-    let metadata = reader.clone().get_metadata(None).await?;
+    let metadata = if options.gpu {
+        let arrow_options =
+            parquet::arrow::arrow_reader::ArrowReaderOptions::new().with_page_index(true);
+        reader.clone().get_metadata(Some(&arrow_options)).await?
+    } else {
+        reader.clone().get_metadata(None).await?
+    };
     let columns = column_context::build(&reader, &metadata).await?;
     let ctx = RuleContext {
         metadata,
         columns,
         reader,
+        gpu: options.gpu,
     };
     let rules = rules::get_rules(rule_names);
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
